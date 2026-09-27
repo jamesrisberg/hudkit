@@ -1,0 +1,20 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift test
+      # The shared scripts and the app template: generate an app next to this checkout,
+      # then test and build it the way an app repo does.
+      - name: Template app
+        run: |
+          scripts/hud-new-app.sh ciapp ciApp "$RUNNER_TEMP/apps"
+          ln -s "$GITHUB_WORKSPACE" "$RUNNER_TEMP/apps/hudkit"
+          cd "$RUNNER_TEMP/apps/ciapp"
+          swift test
+          HUD_SIGN_IDENTITY=- ./build.sh debug

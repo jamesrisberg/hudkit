@@ -1,0 +1,21 @@
+# CI for a MacHUD app repo: installed as .github/workflows/ci.yml by hud-new-app.sh.
+# Package.swift depends on ../hudkit, so HUDKit is checked out next to the app. Works
+# unchanged in every app repo (the repo name comes from the event).
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ${{ github.event.repository.name }}
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/hudkit
+          path: hudkit
+      - run: swift --version
+      - run: swift test
+        working-directory: ${{ github.event.repository.name }}
