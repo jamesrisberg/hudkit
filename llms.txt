@@ -1,0 +1,18 @@
+# HUDKit
+
+> The Swift package, scripts and app template behind every MacHUD app: macOS menu bar HUD apps (Scratch, Sift, Stash, ffmpegHUD, ...) that MacHUD discovers by a manifest, drives over a Unix-socket JSON-lines contract and shows in its tool dock. To build one, scaffold with scripts/hud-new-app.sh and follow docs/AGENT-GUIDE.md literally.
+
+## Read in this order
+
+- [Agent guide](docs/AGENT-GUIDE.md): step-by-step playbook to build a MacHUD app, with a complete worked example, the verification sequence, pitfalls and the definition of done
+- [Contract](docs/CONTRACT.md): the canonical spec (version 0.1): manifest schema, socket and framing, every verb with request/reply/error examples, subscribe events, settings schema, docks.json, hover vs windowed behaviour, file drops, what MacHUD guarantees, compliance checklist
+- [CLI](docs/CLI.md): the per-app `<repo>` CLI (grammar, exit codes, env), app shorthands, raw `nc -U`, and `machud`
+- [Conventions](docs/CONVENTIONS.md): repo layout, names, build/install scripts, icons, versions, commits
+
+## Reference
+
+- [README](README.md): HUDKit's types, chrome, dock geometry
+- [Changelog](CHANGELOG.md): HUDKit and contract versions
+- [App template](Templates/App): what hud-new-app.sh instantiates
+- [Scripts](scripts): hud-new-app.sh, hud-build.sh, hud-install.sh, hud-icon.sh, hud-ci.yml (usage in each header)
+- [Claude Code skill](.claude/skills/hudkit-app/SKILL.md): the condensed playbook

@@ -1,0 +1,18 @@
+{
+  "id": "xyz.machud.__REPO__",
+  "name": "__PRODUCT__",
+  "socket": "__REPO__",
+  "iconName": "sparkles",
+  "panels": [
+    {
+      "id": "main",
+      "title": "__PRODUCT__",
+      "symbol": "sparkles",
+      "kind": "hover",
+      "order": 90,
+      "defaultSize": [320, 160],
+      "verbs": ["show", "hide", "toggle", "frame", "say"],
+      "settingsSchema": "settings.json"
+    }
+  ]
+}
