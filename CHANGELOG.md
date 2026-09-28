@@ -45,6 +45,12 @@ fetch or build it)
 - Verified model downloads (`ModelStore`): pinned sizes and checksums, reuse of identical files
   another app already downloaded, and a one-time check of a complete folder installed elsewhere.
 
+### Fixed
+- `hud-build.sh` now copies every SwiftPM resource bundle (`.build/<configuration>/*.bundle`)
+  into `Contents/Resources` before signing. Previously an app using BrainKit's companion or
+  VoiceKit's Kokoro voice built and signed successfully but crashed at first use, missing the
+  bundle it needed.
+
 ## [0.1.0] - 2026-09-27
 
 The shared contract, visual language and build tooling for MacHUD apps, contract version 0.1.
