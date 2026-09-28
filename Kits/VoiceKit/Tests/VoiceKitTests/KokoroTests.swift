@@ -128,8 +128,47 @@ struct KokoroVoiceTests {
         #expect(second.fakePlaying)
         voice.playback.audioPlayerDidFinishPlaying(second, successfully: true)
         while completions == 0 { await Task.yield() }
-        #expect(events == [true, false, true, false])
+        // The final `false` is reported on the next main-actor turn (see
+        // `seamlessPlaybackReportsOneUninterruptedSpan` below): nothing calls `play()` here,
+        // so it lands shortly after rather than inside this same completion.
+        try await eventually { events == [true, false, true, false] }
         #expect(!second.fakePlaying)
+    }
+
+    @Test func seamlessPlaybackReportsOneUninterruptedSpan() async throws {
+        let gate = SynthesisGate()
+        let first = try FakePlayer(data: silentWave())
+        let second = try FakePlayer(data: silentWave())
+        var players = [first, second]
+        let voice = KokoroVoice(makePlayer: { _ in players.removeFirst() }) { try await gate.run($0, $1, $2) }
+        var events: [Bool] = []
+        voice.onSpeakingChanged = { events.append($0) }
+        var prepared: SpeechClip?
+        var secondCompletions = 0
+        // Wired exactly as `SpeechStreamer.speakNext()` wires it: the first clip's completion
+        // plays the already-prepared next clip synchronously, before ever returning.
+        voice.speak("first") { _ in
+            if let clip = prepared { voice.play(clip) { _ in secondCompletions += 1 } }
+        }
+        while await gate.count() < 1 { await Task.yield() }
+        await gate.finish(0, result: .success([0, 0]))
+        while events.isEmpty { await Task.yield() }
+        #expect(events == [true])
+        // Prepare the next clip ahead of time, exactly as `SpeechStreamer` does while the
+        // first one plays.
+        voice.prepare("second") { result in prepared = try? result.get() }
+        while await gate.count() < 2 { await Task.yield() }
+        await gate.finish(1, result: .success([0, 0]))
+        try await eventually { prepared != nil }
+        // The first clip's natural end synchronously plays the second: `ClipPlayback` must
+        // coalesce the two into one uninterrupted `true`, with no `false` in between.
+        voice.playback.audioPlayerDidFinishPlaying(first, successfully: true)
+        while !second.fakePlaying { await Task.yield() }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(events == [true])
+        voice.stop()
+        #expect(events == [true, false])
+        #expect(secondCompletions == 0)  // stopped, not finished
     }
 
     @Test func rejectedPlaybackReportsErrorWithoutSpeaking() async throws {
