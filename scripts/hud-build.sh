@@ -121,7 +121,8 @@ fi
 # and are not in the app unless copied; the executables find them through
 # @executable_path/../Frameworks. Absolute install names (a Homebrew dylib) are left as they are.
 EXECUTABLES=("$APP/Contents/MacOS/$PRODUCT")
-for f in "$APP/Contents/Helpers"/*(N); do EXECUTABLES+=("$f"); done
+# Plain files only: the resource bundle links beside a helper are not executables.
+for f in "$APP/Contents/Helpers"/*(N.); do EXECUTABLES+=("$f"); done
 FRAMEWORKS=()
 for exe in $EXECUTABLES; do
   for fw in ${(f)"$(otool -L "$exe" | sed -nE 's|^[[:space:]]*@rpath/([^/]+\.framework)/.*|\1|p')"}; do
