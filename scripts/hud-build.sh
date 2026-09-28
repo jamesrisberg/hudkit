@@ -6,7 +6,11 @@
 #   Contents/MacOS/<Product>      the <Product> executable target
 #   Contents/Helpers/<cli>        the <Product>CLI target, if Sources/<Product>CLI exists;
 #                                 named after the manifest's socket (= the repo name)
-#   Contents/Resources/           everything in Sources/<Product>/Resources except Info.plist
+#   Contents/Resources/           everything in Sources/<Product>/Resources except Info.plist,
+#                                 plus every *.bundle SwiftPM produced for the build (a Kit's
+#                                 bundled companion or model data, e.g. BrainKit's
+#                                 BrainKit_BrainKit.bundle or VoiceKit's mlx-swift_Cmlx.bundle
+#                                 and Misaki_Misaki.bundle), found via `swift build --show-bin-path`
 #   Contents/Info.plist           Sources/<Product>/Resources/Info.plist with
 #                                 CFBundleShortVersionString from ./VERSION and
 #                                 CFBundleVersion = the commit count
@@ -63,6 +67,15 @@ cp "$BIN/$PRODUCT" "$APP/Contents/MacOS/$PRODUCT"
 for f in "$RES"/*(N); do
   [[ "${f:t}" == Info.plist ]] && continue
   cp -R "$f" "$APP/Contents/Resources/"
+done
+# SwiftPM resource bundles (a Kit's bundled companion or model data — BrainKit's
+# BrainKit_BrainKit.bundle, VoiceKit's mlx-swift_Cmlx.bundle and Misaki_Misaki.bundle) land
+# beside the build products, one per bundling target; `swift build` does not put them in the
+# app, so an app using them ships broken unless they are copied in here, before signing, so
+# codesign seals them into the app's signature. -p keeps their executable bits (a companion's
+# test fixtures and node scripts).
+for b in "$BIN"/*.bundle(N); do
+  cp -Rp "$b" "$APP/Contents/Resources/"
 done
 cp "$PLIST" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist" 2>/dev/null \

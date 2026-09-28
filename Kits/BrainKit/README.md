@@ -106,9 +106,9 @@ own state, changed with `AgentSessionClient.setPermissions(_:)` while idle.
 The companion lives in `Sources/BrainKit/Companion` and ships in the target's resource bundle,
 `BrainKit_BrainKit.bundle` (folder `Companion`), with its Node tests. `BrainCompanion.directory`
 finds it in the app's `Contents/Resources`, next to the executable or test bundle (`swift run`,
-`swift test`), then in the source checkout. `hud-build.sh` does not copy SwiftPM resource
-bundles, so an app that ships BrainKit copies `.build/<configuration>/BrainKit_BrainKit.bundle`
-into `Contents/Resources` itself.
+`swift test`), then in the source checkout. `hud-build.sh` copies it into `Contents/Resources`
+along with every other SwiftPM resource bundle (see `docs/CONVENTIONS.md`), so an app that ships
+BrainKit needs nothing extra.
 
 Its HTTP contract, the runtime interface, each brain's transport and approvals, and the voice
 instructions are documented in [Companion/README.md](Sources/BrainKit/Companion/README.md).
