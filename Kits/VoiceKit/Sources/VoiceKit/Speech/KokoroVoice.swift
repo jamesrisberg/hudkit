@@ -4,7 +4,7 @@ import Foundation
 /// Kokoro on this Mac: synthesizes mono 24 kHz samples and plays them from memory, never
 /// writing audio to disk. No text or audio leaves the machine.
 @MainActor
-public final class KokoroVoice: SpeechVoice {
+public final class KokoroVoice: PrefetchingSpeechVoice {
     public enum Failure: LocalizedError {
         case invalidText, invalidVoice, invalidSpeed, invalidAudio, oversizedAudio, playback
 
@@ -42,6 +42,10 @@ public final class KokoroVoice: SpeechVoice {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var completion: ((Result<Void, Error>) -> Void)?
+    /// A `prepare(_:completion:)` synthesis in flight, tracked apart from `generation`/`task`
+    /// so it can run while a different clip plays.
+    private var prepareGeneration = UUID()
+    private var prepareTask: Task<Void, Never>?
 
     /// Kokoro loaded from an installed model folder (`KokoroModels.directory(in:)`).
     public convenience init(modelDirectory: URL, options: VoiceSettings.Kokoro = .init()) {
@@ -132,12 +136,63 @@ public final class KokoroVoice: SpeechVoice {
         }
     }
 
+    /// Synthesizes `text` without playing it, so it can be handed to `play(_:completion:)`
+    /// once the clip currently playing finishes. Runs independently of `speak`/`play`'s own
+    /// generation, so it can proceed while another clip plays; a newer `prepare` call, or
+    /// `stop()`, cancels an earlier one.
+    public func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
+        prepareTask?.cancel()
+        let identity = UUID()
+        prepareGeneration = identity
+        let voice = options.voice
+        let speed = options.speed
+        prepareTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try Self.validate(text: text, voice: voice, speed: speed)
+                let samples = try await self.synthesize(text, voice, speed)
+                try Task.checkCancellation()
+                guard self.prepareGeneration == identity else { return }
+                let audio = try await Self.encode(samples)
+                try Task.checkCancellation()
+                guard self.prepareGeneration == identity else { return }
+                self.prepareTask = nil
+                completion(.success(SpeechClip(audio: audio)))
+            } catch {
+                guard self.prepareGeneration == identity, !Task.isCancelled else { return }
+                self.prepareTask = nil
+                completion(.failure(error))
+            }
+        }
+    }
+
+    /// Plays a clip `prepare(_:completion:)` already produced. Unlike `speak`, this does not
+    /// reset the whole voice first: `ClipPlayback` itself coalesces a `play()` that follows
+    /// the previous clip's natural end into one uninterrupted `onSpeakingChanged`.
+    public func play(_ clip: SpeechClip, completion: @escaping (Result<Void, Error>) -> Void) {
+        task?.cancel()
+        task = nil
+        generation = UUID()
+        let identity = generation
+        self.completion = completion
+        do {
+            try playback.play(clip.audio, failure: Failure.playback) { [weak self] result in
+                self?.finish(result, identity: identity)
+            }
+        } catch {
+            finish(.failure(error), identity: identity)
+        }
+    }
+
     public func stop() {
         generation = UUID()
         task?.cancel()
         task = nil
         completion = nil
         playback.stop()
+        prepareGeneration = UUID()
+        prepareTask?.cancel()
+        prepareTask = nil
     }
 
     private func finish(_ result: Result<Void, Error>, identity: UUID) {
@@ -145,7 +200,6 @@ public final class KokoroVoice: SpeechVoice {
         let callback = completion
         completion = nil
         task = nil
-        playback.stop()
         callback?(result)
     }
 }
