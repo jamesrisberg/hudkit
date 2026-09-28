@@ -1,0 +1,17 @@
+{
+  "name": "brainkit-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node smoke.mjs",
+    "acceptance": "node acceptance.mjs",
+    "acceptance:permissions": "node permission-acceptance.mjs",
+    "acceptance:routing": "node routing-acceptance.mjs"
+  }
+}
