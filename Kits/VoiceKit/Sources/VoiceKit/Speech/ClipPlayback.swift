@@ -89,6 +89,7 @@ final class ClipPlayback: NSObject, AVAudioPlayerDelegate {
             guard let self, !Task.isCancelled else { return }
             self.pendingIdle = nil
             self.isSpeaking = false
+            self.onLevel?(0)
             self.onSpeakingChanged?(false)
         }
     }
