@@ -63,9 +63,11 @@ public struct ServiceEndpoint: Equatable, Sendable {
 /// and hands out clients for it.
 ///
 /// The child runs with `BRAINKIT_PARENT_PIPE=1` and the supervisor holds its stdin, so it
-/// exits with the host. A configuration that differs only in `runtime` keeps the running
-/// process (the host switches with `AgentSessionClient.setRuntime`; the new flag applies at
-/// the next start); any other change restarts it.
+/// exits with the host. The first configuration applies at once; later ones apply after
+/// `debounce` (0.4 s) without another change, so a settings field being typed into does not
+/// restart the companion per keystroke. A configuration that differs only in `runtime` keeps
+/// the running process (the host switches with `AgentSessionClient.setRuntime`; the new flag
+/// applies at the next start); any other change restarts it, after the old process exits.
 @MainActor
 public final class BrainService: ObservableObject {
     /// The line the companion prints once it listens.
@@ -78,7 +80,13 @@ public final class BrainService: ObservableObject {
     @Published public private(set) var nodeStatus = ""
     /// Last detection of each brain for the current configuration.
     @Published public private(set) var detections: [AgentRuntime: BrainCatalog.Detection] = [:]
+    /// The configuration last asked for; it may still be waiting out the debounce.
     public private(set) var configuration: BrainServiceConfiguration?
+    /// The configuration the process runs with.
+    private var applied: BrainServiceConfiguration?
+    private var pendingApply: ScheduledAction?
+    private let scheduler: ServiceScheduling
+    private let debounce: TimeInterval
 
     private let locatorProvider: () -> ExecutableLocator
     private let nodeVersion: (String) -> String?
@@ -97,10 +105,13 @@ public final class BrainService: ObservableObject {
         scheduler: ServiceScheduling = DispatchServiceScheduler(),
         policy: ManagedService.Policy = ManagedService.Policy(),
         locator: @escaping () -> ExecutableLocator = { .live },
-        nodeVersion: @escaping (String) -> String? = BrainService.runVersion,
+        nodeVersion: @escaping (String) -> String? = { BrainService.runVersion($0) },
         companionDirectory: @escaping () -> URL? = { BrainCompanion.directory },
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        debounce: TimeInterval = 0.4
     ) {
+        self.scheduler = scheduler
+        self.debounce = debounce
         service = ManagedService(
             id: "brain", displayName: "Brain companion", readinessMarker: Self.readinessMarker,
             launcher: launcher, scheduler: scheduler, policy: policy)
@@ -112,15 +123,56 @@ public final class BrainService: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Run the companion as configured, or stop it (`nil`).
+    /// Run the companion as configured, or stop it (`nil`, applied at once).
     public func configure(_ configuration: BrainServiceConfiguration?) {
         self.configuration = configuration
+        pendingApply?.cancel()
+        pendingApply = nil
+        guard let configuration else { return apply(nil) }
+        guard applied != nil else { return apply(configuration) }
+        pendingApply = scheduler.schedule(after: debounce) { [weak self] in
+            self?.pendingApply = nil
+            self?.apply(configuration)
+        }
+    }
+
+    /// Restart the process now, clearing the failure count.
+    public func restart() { service.restart() }
+
+    public func stop() { configure(nil) }
+
+    /// Look the brains and Node.js up again (after an install or upgrade); the next start uses
+    /// what is found.
+    public func refreshDetections() {
+        detect(configuration)
+        nodeVersions.removeAll()
+    }
+
+    /// The running companion's address and token. Nil until this process has reported ready,
+    /// so a token left by an earlier run is never paired with a process that is not listening.
+    /// The token file must be a private (0600), regular, user-owned file, as the companion
+    /// itself requires.
+    public func endpoint() -> ServiceEndpoint? {
+        guard service.state == .running, let applied,
+              let token = Self.readToken(URL(fileURLWithPath: applied.stateDirectory).appendingPathComponent("token")),
+              let url = URL(string: "http://127.0.0.1:\(applied.port)")
+        else { return nil }
+        return ServiceEndpoint(url: url, token: token)
+    }
+
+    /// A client for the running companion; nil until it is ready.
+    public func makeClient() -> AgentSessionClient? {
+        endpoint().map { AgentSessionClient(endpoint: $0.url, token: $0.token) }
+    }
+
+    private func apply(_ configuration: BrainServiceConfiguration?) {
+        applied = configuration
         guard let configuration else {
             service.stop()
             lastKey = nil
             return
         }
-        refreshDetections()
+        detect(configuration)
         switch processSpec(for: configuration) {
         case .success(let built):
             if built.key == lastKey, service.spec != nil {
@@ -135,38 +187,37 @@ public final class BrainService: ObservableObject {
         }
     }
 
-    /// Restart the process now, clearing the failure count.
-    public func restart() { service.restart() }
-
-    public func stop() { configure(nil) }
-
-    /// Look the brains up again (after an install, or a changed override).
-    public func refreshDetections() {
+    private func detect(_ configuration: BrainServiceConfiguration?) {
         let locator = locatorProvider()
         var result: [AgentRuntime: BrainCatalog.Detection] = [:]
         for runtime in AgentRuntime.allCases {
-            result[runtime] = BrainCatalog.detect(runtime, locator: locator, override: override(for: runtime))
+            let override: String
+            switch runtime {
+            case .codex: override = configuration?.codexPath ?? ""
+            case .claude: override = configuration?.claudePath ?? ""
+            case .hermes: override = ""
+            }
+            result[runtime] = BrainCatalog.detect(runtime, locator: locator, override: override)
         }
         detections = result
-        nodeVersions.removeAll()
     }
 
-    /// The companion's address and token, once it has written its token file.
-    public func endpoint() -> ServiceEndpoint? {
-        guard let configuration,
-              let text = try? String(
-                contentsOf: URL(fileURLWithPath: configuration.stateDirectory).appendingPathComponent("token"),
-                encoding: .utf8),
-              let url = URL(string: "http://127.0.0.1:\(configuration.port)")
+    /// Reads a companion token like the companion does: no symlink, a regular file owned by
+    /// this user and readable by no one else, 64 hex digits.
+    static func readToken(_ url: URL) -> String? {
+        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_uid == getuid(),
+              info.st_mode & 0o077 == 0,
+              let data = try? handle.read(upToCount: 256)
         else { return nil }
-        let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty, !token.contains("\n") else { return nil }
-        return ServiceEndpoint(url: url, token: token)
-    }
-
-    /// A client for the running companion; nil until its token exists.
-    public func makeClient() -> AgentSessionClient? {
-        endpoint().map { AgentSessionClient(endpoint: $0.url, token: $0.token) }
+        let token = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard token.utf8.count == 64, token.allSatisfy({ $0.isASCII && $0.isHexDigit && !$0.isUppercase }) else {
+            return nil
+        }
+        return token
     }
 
     // MARK: Spec
@@ -202,8 +253,15 @@ public final class BrainService: ObservableObject {
         case .success(let path): node = path
         case .failure(let reason): return .failure(reason)
         }
+        let name = configuration.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
+        // The companion's own rule (server.mjs): one line of 1-64 UTF-16 code units.
+        guard name.utf16.count <= 64, !name.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) else {
+            return .failure(ServiceUnavailable(reason: "The assistant name must be one line of at most 64 characters."))
+        }
         try? fileManager.createDirectory(
             atPath: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // An existing directory keeps its mode on create; the token and conversation state are private.
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stateDirectory)
         var arguments = [
             server.path, "--cwd", workspace, "--state-dir", stateDirectory, "--port", String(configuration.port),
         ]
@@ -211,7 +269,6 @@ public final class BrainService: ObservableObject {
         if let claude = detections[.claude]?.executable { arguments += ["--claude", claude] }
         let hermesURL = configuration.hermesURL.trimmingCharacters(in: .whitespaces)
         if !hermesURL.isEmpty { arguments += ["--runtime-url", hermesURL] }
-        let name = configuration.assistantName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty { arguments += ["--assistant-name", name] }
         let key = [node] + arguments
         arguments += ["--runtime", configuration.runtime.rawValue]
@@ -253,25 +310,23 @@ public final class BrainService: ObservableObject {
         return .success(node)
     }
 
-    private func override(for runtime: AgentRuntime) -> String {
-        switch runtime {
-        case .codex: return configuration?.codexPath ?? ""
-        case .claude: return configuration?.claudePath ?? ""
-        case .hermes: return ""
-        }
-    }
-
-    /// `<executable> --version` output, or nil when it cannot run.
-    public nonisolated static func runVersion(_ executable: String) -> String? {
+    /// `<executable> --version` output, or nil when it cannot run or does not finish within
+    /// `timeout` seconds (it runs on the caller's thread; results are cached per path).
+    public nonisolated static func runVersion(_ executable: String, timeout: TimeInterval = 2) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = ["--version"]
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do { try process.run() } catch { return nil }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8)
+        guard exited.wait(timeout: .now() + timeout) == .success else {
+            kill(process.processIdentifier, SIGKILL)
+            return nil
+        }
+        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
     }
 }
