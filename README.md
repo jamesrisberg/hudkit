@@ -11,6 +11,9 @@ look the same:
 
 - `Sources/HUDKit`: the control socket, manifest, contract router, dock geometry, settings
   schema, glass chrome, motion and hotkeys.
+- `Sources/BrainKit`: a separate product, the local agent brain (Codex, Claude Code or Hermes
+  behind a bundled Node companion) with its launcher, client and transcript model; see
+  [docs/BRAINKIT.md](docs/BRAINKIT.md).
 - `scripts/`: `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh` and the `hud-ci.yml` workflow.
 - `Templates/App`: a minimal complete app that `hud-new-app.sh` instantiates.
 - [docs/](docs/README.md): the [contract spec](docs/CONTRACT.md), the
