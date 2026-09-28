@@ -30,6 +30,14 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 - The companion's `--assistant-name` names the assistant in its voice instructions; without it
   the instructions name none. Its environment variables use the `BRAINKIT_` prefix.
 
+**Build**
+- `hud-build.sh` builds the executable products named in `HUD_HELPERS` and ships each in
+  `Contents/Helpers`, signed with the app's entitlements before the app, for an app that runs a
+  helper process of its own (MacHUD's voice host). Each helper finds the SwiftPM resource bundles
+  through links beside it.
+- `hud-build.sh` copies every `@rpath` framework the app or a helper links (such as
+  `Sparkle.framework`) into `Contents/Frameworks` and signs it, so the bundle loads it at runtime.
+
 **VoiceKit** (a separate package in `Kits/VoiceKit`; apps that depend only on HUDKit do not
 fetch or build it)
 - Wake word detection on the Mac with openWakeWord models, fed by the app's own microphone
