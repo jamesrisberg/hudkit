@@ -86,4 +86,41 @@ final class HUDNotchGeometryTests: XCTestCase {
         XCTAssertEqual(f.midX, secondary.screenFrame.midX, accuracy: 0.001)
         XCTAssertGreaterThanOrEqual(f.minX, secondary.screenFrame.minX)
     }
+
+    // MARK: - Notch-body path
+
+    func testBodyPathFillsExactlyTheGivenSize() {
+        let path = HUDNotchGeometry.bodyPath(width: 180, height: 32, bottomRadius: 14)
+        let box = path.boundingBoxOfPath
+        XCTAssertEqual(box.width, 180, accuracy: 0.01)
+        XCTAssertEqual(box.height, 32, accuracy: 0.01)
+        XCTAssertEqual(box.minX, 0, accuracy: 0.01)
+        XCTAssertEqual(box.minY, 0, accuracy: 0.01)
+    }
+
+    func testBodyPathHasSquareTopCornersByDefault() {
+        // Flush with the housing: the default `topRadius` is 0, so the top-left corner point
+        // itself is inside the fill, unlike a rounded corner which cuts it away.
+        let path = HUDNotchGeometry.bodyPath(width: 180, height: 32, bottomRadius: 14)
+        XCTAssertTrue(path.contains(CGPoint(x: 0.5, y: 0.5)))
+        XCTAssertTrue(path.contains(CGPoint(x: 179.5, y: 0.5)))
+    }
+
+    func testBodyPathRoundsTheBottomCorners() {
+        let path = HUDNotchGeometry.bodyPath(width: 180, height: 32, bottomRadius: 14)
+        XCTAssertFalse(path.contains(CGPoint(x: 0.5, y: 31.5)), "the bottom-left corner is cut by the radius")
+        XCTAssertFalse(path.contains(CGPoint(x: 179.5, y: 31.5)), "the bottom-right corner is cut by the radius")
+        XCTAssertTrue(path.contains(CGPoint(x: 90, y: 31.5)), "the bottom edge's middle is unaffected")
+    }
+
+    func testBodyPathTopRadiusSoftensTheTopCornersToo() {
+        let path = HUDNotchGeometry.bodyPath(width: 22, height: 22, bottomRadius: 11, topRadius: 11)
+        XCTAssertFalse(path.contains(CGPoint(x: 0.5, y: 0.5)), "a nonzero topRadius rounds the top corner away")
+    }
+
+    func testBodyPathInRectOffsetsTheSameShape() {
+        let origin = HUDNotchGeometry.bodyPath(width: 180, height: 32, bottomRadius: 14)
+        let offset = HUDNotchGeometry.bodyPath(in: CGRect(x: 40, y: 10, width: 180, height: 32), topRadius: 0, bottomRadius: 14)
+        XCTAssertEqual(offset.boundingBoxOfPath, origin.boundingBoxOfPath.offsetBy(dx: 40, dy: 10))
+    }
 }

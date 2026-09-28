@@ -56,4 +56,35 @@ public struct HUDNotchGeometry: Equatable, Sendable {
     public func anchorFrame(for size: CGSize) -> CGRect {
         CGRect(x: screenFrame.midX - size.width / 2, y: topAnchorY - size.height, width: size.width, height: size.height)
     }
+
+    /// The notch-body shape: the black shape a host draws extending the camera housing
+    /// downward (SpeakFree's `OverlayLayout.notchBodyPath`, ported here so every host shares
+    /// one copy), `width` × `height` with its origin at `(0, 0)` in the panel's own coordinate
+    /// space — a flipped view (`isFlipped == true`, y increasing downward) drawing the shape at
+    /// its own bounds. Top corners are square (`topRadius` 0, the default) when the shape is
+    /// exactly the housing's width, so it reads as the housing continuing down; a nonzero
+    /// `topRadius` softens them for a shape that has pulled away from the notch (MacHUD's
+    /// resting orb morphs between the two). Bottom corners are always rounded, by `bottomRadius`.
+    public static func bodyPath(width: CGFloat, height: CGFloat, bottomRadius: CGFloat, topRadius: CGFloat = 0) -> CGPath {
+        bodyPath(in: CGRect(x: 0, y: 0, width: width, height: height), topRadius: topRadius, bottomRadius: bottomRadius)
+    }
+
+    /// `bodyPath(width:height:bottomRadius:topRadius:)` at an arbitrary origin, for a caller
+    /// that positions the shape itself rather than translating the path afterward.
+    public static func bodyPath(in rect: CGRect, topRadius: CGFloat, bottomRadius: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        let (minX, maxX, minY, maxY) = (rect.minX, rect.maxX, rect.minY, rect.maxY)
+        path.move(to: CGPoint(x: minX, y: minY + topRadius))
+        if topRadius > 0 {
+            path.addArc(tangent1End: CGPoint(x: minX, y: minY), tangent2End: CGPoint(x: minX + topRadius, y: minY), radius: topRadius)
+            path.addArc(tangent1End: CGPoint(x: maxX, y: minY), tangent2End: CGPoint(x: maxX, y: minY + topRadius), radius: topRadius)
+        } else {
+            path.addLine(to: CGPoint(x: minX, y: minY))
+            path.addLine(to: CGPoint(x: maxX, y: minY))
+        }
+        path.addArc(tangent1End: CGPoint(x: maxX, y: maxY), tangent2End: CGPoint(x: maxX - bottomRadius, y: maxY), radius: bottomRadius)
+        path.addArc(tangent1End: CGPoint(x: minX, y: maxY), tangent2End: CGPoint(x: minX, y: maxY - bottomRadius), radius: bottomRadius)
+        path.closeSubpath()
+        return path
+    }
 }
