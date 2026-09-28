@@ -6,6 +6,12 @@
 #   Contents/MacOS/<Product>      the <Product> executable target
 #   Contents/Helpers/<cli>        the <Product>CLI target, if Sources/<Product>CLI exists;
 #                                 named after the manifest's socket (= the repo name)
+#   Contents/Helpers/<helper>     each executable product named in HUD_HELPERS (a process the
+#                                 app runs, e.g. MacHUD's MacHUDVoice), under its product name,
+#                                 with a link to each SwiftPM resource bundle in Resources (a
+#                                 helper's Bundle.main is Contents/Helpers)
+#   Contents/Frameworks/          every @rpath framework the app or a helper links that SwiftPM
+#                                 built into the bin path (e.g. Sparkle.framework)
 #   Contents/Resources/           everything in Sources/<Product>/Resources except Info.plist,
 #                                 plus every *.bundle SwiftPM produced for the build (a Kit's
 #                                 bundled companion or model data, e.g. BrainKit's
@@ -14,8 +20,10 @@
 #   Contents/Info.plist           Sources/<Product>/Resources/Info.plist with
 #                                 CFBundleShortVersionString from ./VERSION and
 #                                 CFBundleVersion = the commit count
-# then signs it with the first "Apple Development" identity, or ad-hoc when there is none.
-# <Product>.entitlements at the repo root is applied when present.
+# then signs it with the first "Apple Development" identity, or ad-hoc when there is none:
+# frameworks first, then the CLI and the helpers, then the app. <Product>.entitlements at the
+# repo root is applied to the app and to every HUD_HELPERS helper (a helper the app launches
+# as its child needs the same hardened-runtime exceptions, e.g. audio input).
 # Finally it announces the bundle to a running MacHUD (`apps announce path=`), so the app's
 # button appears in the tool dock at once. A MacHUD that is not running never fails the build.
 #
@@ -26,6 +34,8 @@
 #   MACHUD_SOCKET       MacHUD socket to announce to (default: the MacHUD contract socket,
 #                       ~/Library/Application Support/MacHUD/sockets/machud.sock)
 #   HUD_NO_ANNOUNCE=1   skip the announcement
+#   HUD_HELPERS         space-separated executable products to build and put in
+#                       Contents/Helpers (e.g. HUD_HELPERS="MacHUDVoice")
 #
 # Prints the app path as its last line.
 set -euo pipefail
@@ -55,8 +65,15 @@ if (( HAS_CLI )); then
   [[ -n "$CLI_NAME" ]] || { print -u2 "hud-build: $RES/machud.json has no socket (the CLI's name)"; exit 1; }
 fi
 
+HELPERS=(${=HUD_HELPERS:-})
+for h in $HELPERS; do
+  [[ "$h" != "$PRODUCT" && "$h" != "$CLI_NAME" ]] \
+    || { print -u2 "hud-build: helper $h collides with the app or its CLI"; exit 1; }
+done
+
 swift build -c "$CONFIG" --product "$PRODUCT"
 if (( HAS_CLI )); then swift build -c "$CONFIG" --product "${PRODUCT}CLI"; fi
+for h in $HELPERS; do swift build -c "$CONFIG" --product "$h"; done
 BIN="$(swift build -c "$CONFIG" --show-bin-path)"
 
 APP="build/$PRODUCT.app"
@@ -92,6 +109,29 @@ if (( HAS_CLI )); then
   mkdir -p "$APP/Contents/Helpers"
   cp "$BIN/${PRODUCT}CLI" "$APP/Contents/Helpers/$CLI_NAME"
 fi
+if (( ${#HELPERS} )); then
+  mkdir -p "$APP/Contents/Helpers"
+  for h in $HELPERS; do cp "$BIN/$h" "$APP/Contents/Helpers/$h"; done
+  # A helper's Bundle.main is Contents/Helpers, not the app, so SwiftPM's resource accessor
+  # (Bundle.module) looks for its bundles there and stops the process when they are missing.
+  # Relative links into Contents/Resources keep one copy, sealed by the app's signature.
+  for b in "$BIN"/*.bundle(N); do ln -s "../Resources/${b:t}" "$APP/Contents/Helpers/${b:t}"; done
+fi
+# Frameworks SwiftPM links by @rpath (a binary target such as Sparkle) sit beside the products
+# and are not in the app unless copied; the executables find them through
+# @executable_path/../Frameworks. Absolute install names (a Homebrew dylib) are left as they are.
+EXECUTABLES=("$APP/Contents/MacOS/$PRODUCT")
+for f in "$APP/Contents/Helpers"/*(N); do EXECUTABLES+=("$f"); done
+FRAMEWORKS=()
+for exe in $EXECUTABLES; do
+  for fw in ${(f)"$(otool -L "$exe" | sed -nE 's|^[[:space:]]*@rpath/([^/]+\.framework)/.*|\1|p')"}; do
+    [[ -n "$fw" && -d "$BIN/$fw" && ${FRAMEWORKS[(Ie)$fw]} -eq 0 ]] && FRAMEWORKS+=("$fw")
+  done
+done
+if (( ${#FRAMEWORKS} )); then
+  mkdir -p "$APP/Contents/Frameworks"
+  for fw in $FRAMEWORKS; do cp -Rp "$BIN/$fw" "$APP/Contents/Frameworks/"; done
+fi
 
 IDENTITY="${HUD_SIGN_IDENTITY-}"
 if [[ -z "$IDENTITY" ]]; then
@@ -104,14 +144,15 @@ SIGN=(codesign --force --sign "$IDENTITY")
 # Extended attributes (Finder info, quarantine, resource forks copied in with a resource)
 # make codesign refuse the bundle, and would travel into a release zip.
 xattr -cr "$APP"
+ENTITLEMENTS=()
+[[ -f "$PRODUCT.entitlements" ]] && ENTITLEMENTS=(--entitlements "$PRODUCT.entitlements")
+# Inside out: codesign seals what is already signed, so the app goes last.
+for fw in $FRAMEWORKS; do "${SIGN[@]}" "$APP/Contents/Frameworks/$fw"; done
 if (( HAS_CLI )); then
   "${SIGN[@]}" "$APP/Contents/Helpers/$CLI_NAME"
 fi
-if [[ -f "$PRODUCT.entitlements" ]]; then
-  "${SIGN[@]}" --entitlements "$PRODUCT.entitlements" "$APP"
-else
-  "${SIGN[@]}" "$APP"
-fi
+for h in $HELPERS; do "${SIGN[@]}" "${ENTITLEMENTS[@]}" "$APP/Contents/Helpers/$h"; done
+"${SIGN[@]}" "${ENTITLEMENTS[@]}" "$APP"
 if [[ "$IDENTITY" == "-" ]]; then
   print -u2 "Signed ad-hoc (permission grants such as Accessibility may need renewing after each rebuild)"
 else
