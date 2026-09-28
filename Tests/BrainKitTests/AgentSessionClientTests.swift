@@ -137,7 +137,7 @@ final class AgentSessionClientTests: XCTestCase {
         let client = client(PermissionsProtocol.self, token: String(repeating: "b", count: 64))
         try await client.connect()
         XCTAssertEqual(client.snapshot?.permissions?.mode, .approvedFolders)
-        XCTAssertNil(client.snapshot?.route, "Older companions remain compatible")
+        XCTAssertNil(client.snapshot?.route, "A snapshot without a route decodes")
         XCTAssertNil(client.snapshot?.runtime)
         XCTAssertEqual(client.snapshot?.runtimeName, "Codex", "A companion without a runtime field runs Codex")
         let requested = AgentPermissions(mode: .fullAccess, approvedFolders: ["/workspace", "/another folder"])

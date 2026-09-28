@@ -195,9 +195,9 @@ and declines its own pending approvals when a turn ends.
 5. In BrainKit, add the case to `AgentRuntime` (`Sources/BrainKit/AgentSessionClient.swift`)
    and its entry to `BrainCatalog`.
 
-The state file keeps the active runtime's state at top level (the pre-runtime
-format, which belongs to Codex) and other runtimes' conversations under
-`conversations`, so switching back resumes them.
+The state file keeps the active runtime's state at top level, named by `runtime`
+(a file without `runtime` belongs to Codex), and other runtimes' conversations
+under `conversations`, so switching back resumes them.
 
 ## HTTP contract
 
@@ -239,7 +239,8 @@ Snapshots contain `threadId`, `turnId`, `status`, `output`, `progress`, `approva
 `requestId`, `route`, `timing`, `permissions` (mode and approved folders),
 `routing`, then `runtime` (the runtime ID) and `capabilities`
 (`approvals`, `folderScope`, `modelRouting`, `cancel`). The fields before `runtime`
-are byte-compatible with the pre-runtime companion (`test/snapshot-compat.test.mjs`).
+keep a fixed order and encoding, and new fields are only appended after them
+(`test/snapshot-compat.test.mjs`).
 Status is `idle`, `running`, `approval`, `interrupted`, or `failed`. `idle` with a
 non-null turn ID means completion. `threadId` is the runtime's conversation ID and
 `turnId` its turn ID (a Hermes run ID; a companion-generated UUID for Claude).

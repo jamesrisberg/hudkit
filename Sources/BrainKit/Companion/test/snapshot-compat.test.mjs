@@ -5,9 +5,9 @@ import { Session } from '../session.mjs';
 import { CodexRuntime } from '../runtimes/codex.mjs';
 import { createServer } from '../server.mjs';
 
-// Snapshots captured from the pre-runtime-interface companion (commit f877179) for
-// one scripted Codex conversation, with instanceId/approval IDs/timestamps masked.
-// The app decodes these bytes; the refactor may only append fields at the end.
+// Golden snapshots of one scripted Codex conversation, with instanceId/approval IDs/
+// timestamps masked. Clients decode these bytes; new fields may only be appended
+// after them (APPENDED).
 const GOLDEN = [
   "{\"threadId\":\"thread-1\",\"turnId\":null,\"status\":\"idle\",\"output\":\"\",\"progress\":\"Ready\",\"approvals\":[],\"error\":null,\"revision\":1,\"instanceId\":\"X\",\"requestId\":null,\"route\":null,\"timing\":null,\"permissions\":{\"mode\":\"approvedFolders\",\"approvedFolders\":[\"/workspace\"]},\"routing\":{\"mode\":\"automatic\",\"available\":true,\"fastModel\":\"gpt-5.6-luna\",\"deepModel\":\"gpt-6-astra\"}}",
   "{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\",\"status\":\"running\",\"output\":\"\",\"progress\":\"Thinking\",\"approvals\":[],\"error\":null,\"revision\":5,\"instanceId\":\"X\",\"requestId\":\"request-000000001\",\"route\":{\"tier\":\"fast\",\"model\":\"gpt-5.6-luna\",\"effort\":\"low\",\"reason\":\"Straightforward request\"},\"timing\":{\"startedAt\":\"N\",\"firstResponseMs\":null,\"completedMs\":null},\"permissions\":{\"mode\":\"approvedFolders\",\"approvedFolders\":[\"/workspace\"]},\"routing\":{\"mode\":\"automatic\",\"available\":true,\"fastModel\":\"gpt-5.6-luna\",\"deepModel\":\"gpt-6-astra\"}}",
@@ -31,7 +31,7 @@ class FakeCodex extends EventEmitter {
 }
 const mask = s => ({ ...s, instanceId: 'X', timing: s.timing && Object.fromEntries(Object.entries(s.timing).map(([k, v]) => [k, v === null ? null : 'N'])), approvals: s.approvals.map(a => ({ ...a, id: 'A' })) });
 
-test('HTTP snapshots stay byte-compatible with the pre-runtime companion, plus appended runtime fields', async t => {
+test('HTTP snapshots keep the golden fields and bytes, with runtime fields appended', async t => {
   const codex = new FakeCodex();
   const session = new Session({ runtime: new CodexRuntime({ transport: codex }), cwd: '/workspace' });
   const token = 'b'.repeat(64);

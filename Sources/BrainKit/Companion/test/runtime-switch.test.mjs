@@ -53,7 +53,7 @@ test('switching runtime keeps permissions and request IDs, stashes and resumes e
   assert.equal(built.codex.started[0].marker, 'codex');
 });
 
-test('a legacy state file belongs to Codex; choosing another runtime at startup never reuses its thread or receipt', async () => {
+test('a state file without a runtime belongs to Codex; choosing another runtime at startup never reuses its thread or receipt', async () => {
   const hermes = fakeRuntime('hermes');
   const session = new Session({ runtime: hermes, cwd: '/workspace', saved: { threadId: 'codex-thread', lastRouteTier: 'deep', receipt: { requestId: 'r', previousTurnId: null, acceptedTurnId: null } } });
   await session.initialize();
