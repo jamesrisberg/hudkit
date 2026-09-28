@@ -99,10 +99,10 @@ opening a sentence, or inside a decimal) and they are spoken in order, one at a 
 until `stop()`, which also drops the queue. Text is spoken as written: markdown and code are
 not stripped.
 
-An app that ships `KokoroVoice` must carry MLX's Metal library and Misaki's lexicons: the
-`mlx-swift_Cmlx.bundle` and `Misaki_Misaki.bundle` resource bundles from the build products
-go in `Contents/Resources`. Without them the process stops at the first synthesis (MLX reports
-"Failed to load the default metallib").
+An app that ships `KokoroVoice` must carry MLX's Metal library and Misaki's lexicons:
+`hud-build.sh` copies the `mlx-swift_Cmlx.bundle` and `Misaki_Misaki.bundle` resource bundles
+from the build products into `Contents/Resources` (see `docs/CONVENTIONS.md`). Without them the
+process stops at the first synthesis (MLX reports "Failed to load the default metallib").
 
 ## Settings
 
