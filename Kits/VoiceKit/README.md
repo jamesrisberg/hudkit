@@ -24,7 +24,7 @@ Dependencies: [onnxruntime-swift-package-manager](https://github.com/microsoft/o
 |---|---|
 | Wake word | `WakeDetector`, `InProcessWakeDetector`, `WakeScoringEngine`, `OpenWakeWordEngine`, `WakeListener`, `WakeAudioSource`, `WakeDetection`, `WakeModel`, `WakeModels` |
 | Trigger phrases | `TriggerPhraseRegistry`, `TriggerPhrase`, `TriggerMatch`, `VoiceAction` |
-| Reply voices | `SpeechVoice`, `SpeechVoiceKind`, `KokoroVoice`, `SystemVoice`, `GrokVoice`, `SpeechVoices`, `SpeechStreamer`, `SentenceSplitter`, `KokoroEngine`, `KokoroModels` |
+| Reply voices | `SpeechVoice`, `PrefetchingSpeechVoice`, `SpeechClip`, `SpeechVoiceKind`, `KokoroVoice`, `SystemVoice`, `GrokVoice`, `SpeechVoices`, `SpeechStreamer`, `SentenceSplitter`, `MarkdownSpeechFilter`, `KokoroEngine`, `KokoroModels` |
 | Models | `ModelManifest`, `ModelArtifact`, `ModelStore`, `ModelDownload` |
 | Settings | `VoiceSettings`, `VoiceSecretStoring`, `KeychainVoiceSecretStore`, `InMemoryVoiceSecretStore`, `VoiceSecrets` |
 
@@ -79,13 +79,16 @@ plain JSON list of `{phrase, action}`.
 
 `SpeechVoice` is one protocol for every voice: `speak(_:completion:)` replaces what is being
 said and completes once, never after `stop()` or a newer `speak`; `onSpeakingChanged` and
-`onLevel` (0...1) drive an indicator.
+`onLevel` (0...1) drive an indicator. A voice that can synthesize ahead of time also conforms
+to `PrefetchingSpeechVoice` (`prepare(_:completion:)` synthesizes a `SpeechClip` without
+playing it, `play(_:completion:)` plays one already prepared); a voice that cannot (like
+`SystemVoice`) just implements `SpeechVoice`.
 
-| Voice | Where it runs | Needs |
-|---|---|---|
-| `KokoroVoice` | on this Mac (Kokoro-82M on MLX, Apple silicon); audio stays in memory | the Kokoro model (`KokoroModels.manifest`, about 340 MB) |
-| `SystemVoice` | on this Mac (`AVSpeechSynthesizer`) | nothing; the fallback |
-| `GrokVoice` | xAI's text to speech (`https://api.x.ai/v1/tts`); sends only the text | an xAI API key |
+| Voice | Where it runs | Needs | Prefetch |
+|---|---|---|---|
+| `KokoroVoice` | on this Mac (Kokoro-82M on MLX, Apple silicon); audio stays in memory | the Kokoro model (`KokoroModels.manifest`, about 340 MB) | yes |
+| `SystemVoice` | on this Mac (`AVSpeechSynthesizer`) | nothing; the fallback | no |
+| `GrokVoice` | xAI's text to speech (`https://api.x.ai/v1/tts`); sends only the text | an xAI API key | no |
 
 `SpeechVoices.make(for:kokoroModelDirectory:secrets:)` builds the voice
 `VoiceSettings.effectiveReplyVoice` chooses: the preferred one, or the system voice when Kokoro
@@ -96,8 +99,16 @@ end. `SentenceSplitter` cuts complete sentences (at `.`, `!`, `?`, `…` followe
 or a line break; not after common abbreviations, initialisms such as "U.S.", a list number
 opening a sentence, or inside a decimal) and they are spoken in order, one at a time.
 `onFinished` reports the end or the first failure once; the stream then ignores more text
-until `stop()`, which also drops the queue. Text is spoken as written: markdown and code are
-not stripped.
+until `stop()`, which also drops the queue. `MarkdownSpeechFilter` cleans each sentence before
+it is queued: heading and list markers are dropped, emphasis markers are removed (the
+emphasized words are kept), a link speaks its text, inline code is spoken as plain words, and
+a fenced code block (its lines and the fence lines themselves) is skipped entirely, never
+spoken. When `voice` conforms to `PrefetchingSpeechVoice`, the streamer prepares the next
+sentence while the current one plays and hands the clip to `play(_:completion:)` once it is
+this sentence's turn, falling back to `speak(_:completion:)` when the prefetch is not ready
+yet. `ClipPlayback` (the clip player behind `KokoroVoice` and `GrokVoice`) coalesces a `play()`
+that follows a clip's natural end into one uninterrupted span: `onSpeakingChanged` does not
+flicker false-then-true at a sentence boundary, only going false once nothing plays next.
 
 An app that ships `KokoroVoice` must carry MLX's Metal library and Misaki's lexicons:
 `hud-build.sh` copies the `mlx-swift_Cmlx.bundle` and `Misaki_Misaki.bundle` resource bundles

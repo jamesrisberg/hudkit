@@ -30,6 +30,55 @@ final class RecordingVoice: SpeechVoice {
     }
 }
 
+/// A voice that can prefetch: records every `speak`, `prepare` and `play` call in order,
+/// carrying a clip's text in `SpeechClip.audio` so a test can tell which sentence was played
+/// without synthesizing anything. The test finishes each `speak`/`play` and each `prepare`.
+@MainActor
+final class RecordingPrefetchingVoice: PrefetchingSpeechVoice {
+    let kind = SpeechVoiceKind.kokoro
+    var onSpeakingChanged: ((Bool) -> Void)?
+    var onLevel: ((Double) -> Void)?
+    var spoken: [String] = []
+    var played: [String] = []
+    var prepared: [String] = []
+    var stops = 0
+    private var completion: ((Result<Void, Error>) -> Void)?
+    private var prepareCompletions: [String: (Result<SpeechClip, Error>) -> Void] = [:]
+
+    func speak(_ text: String, completion: @escaping (Result<Void, Error>) -> Void) {
+        spoken.append(text)
+        self.completion = completion
+    }
+
+    func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
+        prepared.append(text)
+        prepareCompletions[text] = completion
+    }
+
+    func play(_ clip: SpeechClip, completion: @escaping (Result<Void, Error>) -> Void) {
+        played.append(String(data: clip.audio, encoding: .utf8) ?? "")
+        self.completion = completion
+    }
+
+    func stop() {
+        stops += 1
+        completion = nil
+    }
+
+    func finishCurrent(_ result: Result<Void, Error> = .success(())) {
+        let callback = completion
+        completion = nil
+        callback?(result)
+    }
+
+    /// Resolves a `prepare(text:)` call; the clip carries `text` itself so `played` can decode
+    /// it back.
+    func finishPrepare(_ text: String, result: Result<SpeechClip, Error>? = nil) {
+        let callback = prepareCompletions.removeValue(forKey: text)
+        callback?(result ?? .success(SpeechClip(audio: Data(text.utf8))))
+    }
+}
+
 struct SentenceSplitterTests {
     @Test func emitsSentencesOnlyOnceTheirEndIsCertain() {
         var splitter = SentenceSplitter()
@@ -157,5 +206,74 @@ struct SpeechStreamerTests {
         streamer.finish()
         #expect(finished)
         #expect(voice.spoken.isEmpty)
+    }
+
+    @Test func stripsMarkdownAndSkipsCodeBlocksOnARealisticReply() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice)
+        streamer.append(
+            "Here's how to fix it:\n\n```swift\nlet x = 1\nprint(x)\n```\n\n" +
+            "**Note:** run `swift build` first. "
+        )
+        #expect(voice.spoken == ["Here's how to fix it:"])
+        voice.finishCurrent()
+        #expect(voice.spoken == ["Here's how to fix it:", "Note: run swift build first."])
+        streamer.finish()
+        voice.finishCurrent()
+    }
+
+    @Test func prefetchesTheNextSentenceWhileTheCurrentPlays() {
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice)
+        streamer.append("One. Two. Three. ")
+        #expect(voice.spoken == ["One."])
+        // The next sentence starts synthesizing immediately, while "One." is still speaking.
+        #expect(voice.prepared == ["Two."])
+        voice.finishPrepare("Two.")
+        voice.finishCurrent()
+        // The prepared clip is played directly, never re-spoken.
+        #expect(voice.spoken == ["One."])
+        #expect(voice.played == ["Two."])
+        #expect(voice.prepared == ["Two.", "Three."])
+        voice.finishPrepare("Three.")
+        voice.finishCurrent()
+        #expect(voice.played == ["Two.", "Three."])
+        voice.finishCurrent()
+    }
+
+    @Test func fallsBackToSpeakWhenThePrefetchIsNotReadyYet() {
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice)
+        streamer.append("One. Two. ")
+        #expect(voice.spoken == ["One."])
+        #expect(voice.prepared == ["Two."])
+        // "One." finishes before the prefetch for "Two." does.
+        voice.finishCurrent()
+        #expect(voice.spoken == ["One.", "Two."])
+        #expect(voice.played.isEmpty)
+    }
+
+    @Test func stopCancelsAPendingPrefetchAndIgnoresItsLateCompletion() {
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice)
+        streamer.append("One. Two. ")
+        #expect(voice.prepared == ["Two."])
+        streamer.stop()
+        #expect(voice.stops == 1)
+        voice.finishPrepare("Two.")  // late: must not resurrect a clip for the stopped stream
+        streamer.append("Again.")
+        streamer.finish()
+        #expect(voice.spoken == ["One.", "Again."])
+        #expect(voice.played.isEmpty)
+    }
+
+    @Test func aVoiceThatCannotPrefetchKeepsWorking() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice)
+        streamer.append("One. Two. ")
+        #expect(voice.spoken == ["One."])
+        voice.finishCurrent()
+        #expect(voice.spoken == ["One.", "Two."])
+        voice.finishCurrent()
     }
 }
