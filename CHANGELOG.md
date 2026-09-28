@@ -7,6 +7,16 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Added
+- `HUDNotchGeometry`: pure frame math for a panel anchored under the notch, or hanging from the
+  menu bar (or the bare screen edge in full screen) on a screen without one.
+- `HUDPanelWindow.anchorUnderNotch(size:on:)` and `.notchAnchorLevel`: places a panel at that
+  frame, raised to `.statusBar` so it draws above the menu bar layer.
+- `HUDFullscreenObserver`, `HUDScreenSnapshot` and `HUDWindowSnapshot`: publishes per-screen
+  whether the frontmost app is full screen there, from positive window evidence (a layer-0
+  window owned by the frontmost app sized to the screen's full frame), for a host to hide or
+  fall back a notch-anchored panel.
+
 ## [0.1.0] - 2026-09-27
 
 The shared contract, visual language and build tooling for MacHUD apps, contract version 0.1.

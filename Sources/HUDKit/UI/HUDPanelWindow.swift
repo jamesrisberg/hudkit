@@ -179,6 +179,26 @@ open class HUDPanelWindow: NSPanel {
         super.close()
         HUDDockPolicy.shared.update(self)
     }
+
+    /// Level for a panel anchored under the notch or hanging from the menu bar: `.statusBar`
+    /// (25), the lowest standard level above `.mainMenu` (24, where the menu bar itself and its
+    /// own status-item menus draw) — anything at `.mainMenu` or below would be covered by the
+    /// menu bar; `.statusBar` is the first level guaranteed to draw above it.
+    public static let notchAnchorLevel: NSWindow.Level = .statusBar
+
+    /// Moves the window to sit centered under the notch (or hanging from the menu bar where
+    /// there is none), sized to `size`, and raises it to `notchAnchorLevel` so it draws above
+    /// the menu bar. Frame math is `HUDNotchGeometry.anchorFrame(for:)`; call again after a
+    /// resize or a screen change.
+    public func anchorUnderNotch(size: CGSize, geometry: HUDNotchGeometry) {
+        level = Self.notchAnchorLevel
+        setFrame(geometry.anchorFrame(for: size), display: true)
+    }
+
+    /// `anchorUnderNotch(size:geometry:)` reading live geometry off `screen`.
+    public func anchorUnderNotch(size: CGSize, on screen: NSScreen) {
+        anchorUnderNotch(size: size, geometry: HUDNotchGeometry(screen: screen))
+    }
 }
 
 /// Gives a menu bar HUD app a Dock tile and a ⌘-Tab entry while one of its windowed
