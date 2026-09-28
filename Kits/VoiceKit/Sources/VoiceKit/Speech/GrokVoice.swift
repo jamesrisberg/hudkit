@@ -4,7 +4,7 @@ import Foundation
 /// xAI's text to speech. Sends only the text it is asked to speak; the audio stays in memory.
 /// The API key comes from the host (the Keychain, `VoiceSecrets`), never from settings.
 @MainActor
-public final class GrokVoice: SpeechVoice {
+public final class GrokVoice: PrefetchingSpeechVoice {
     public enum Failure: LocalizedError, Equatable {
         case missingKey, invalidText, invalidVoice, service(Int), invalidResponse, oversizedAudio, playback, network
 
@@ -47,6 +47,10 @@ public final class GrokVoice: SpeechVoice {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var completion: ((Result<Void, Error>) -> Void)?
+    /// A `prepare(_:completion:)` request in flight, tracked apart from `generation`/`task` so
+    /// it can run while a different clip plays (mirrors `KokoroVoice`).
+    private var prepareGeneration = UUID()
+    private var prepareTask: Task<Void, Never>?
 
     public init(
         options: VoiceSettings.Grok = .init(),
@@ -140,12 +144,62 @@ public final class GrokVoice: SpeechVoice {
         }
     }
 
+    /// Fetches `text` without playing it, so it can be handed to `play(_:completion:)` once the
+    /// clip currently playing finishes. Runs independently of `speak`/`play`'s own generation,
+    /// so it can proceed while another clip plays; a newer `prepare` call, or `stop()`, cancels
+    /// an earlier one.
+    public func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
+        prepareTask?.cancel()
+        let identity = UUID()
+        prepareGeneration = identity
+        let voice = options.voice
+        let key = apiKey() ?? ""
+        prepareTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let request = try Self.request(text: text, apiKey: key, voice: voice)
+                let audio = try await self.requester(request)
+                try Task.checkCancellation()
+                guard self.prepareGeneration == identity else { return }
+                guard !audio.isEmpty else { throw Failure.invalidResponse }
+                guard audio.count <= Self.maximumAudioBytes else { throw Failure.oversizedAudio }
+                self.prepareTask = nil
+                completion(.success(SpeechClip(audio: audio)))
+            } catch {
+                guard self.prepareGeneration == identity, !Task.isCancelled else { return }
+                self.prepareTask = nil
+                completion(.failure((error as? Failure) ?? Failure.network))
+            }
+        }
+    }
+
+    /// Plays a clip `prepare(_:completion:)` already produced. Unlike `speak`, this does not
+    /// re-fetch: `ClipPlayback` coalesces a `play()` that follows the previous clip's natural
+    /// end into one uninterrupted `onSpeakingChanged`.
+    public func play(_ clip: SpeechClip, completion: @escaping (Result<Void, Error>) -> Void) {
+        task?.cancel()
+        task = nil
+        generation = UUID()
+        let identity = generation
+        self.completion = completion
+        do {
+            try playback.play(clip.audio, failure: Failure.playback) { [weak self] result in
+                self?.finish(result, identity: identity)
+            }
+        } catch {
+            finish(.failure(error), identity: identity)
+        }
+    }
+
     public func stop() {
         generation = UUID()
         task?.cancel()
         task = nil
         completion = nil
         playback.stop()
+        prepareGeneration = UUID()
+        prepareTask?.cancel()
+        prepareTask = nil
     }
 
     private func finish(_ result: Result<Void, Error>, identity: UUID) {
@@ -153,7 +207,6 @@ public final class GrokVoice: SpeechVoice {
         let callback = completion
         completion = nil
         task = nil
-        playback.stop()
         callback?(result)
     }
 }

@@ -200,8 +200,19 @@ open class HUDSocketServer {
         guard let data = line.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let command = obj["command"] as? String else { return nil }
-        let args = (obj["args"] as? [String: Any] ?? [:]).reduce(into: Args()) { $0[$1.key] = "\($1.value)" }
+        let args = (obj["args"] as? [String: Any] ?? [:]).reduce(into: Args()) { $0[$1.key] = stringify($1.value) }
         return (command, args)
+    }
+
+    /// A handler's `Args` are always strings; a scalar (string, number, bool) renders as today
+    /// (`"\(value)"`), and an object or array value round-trips as compact JSON text instead of
+    /// Swift's `description`, so a client can send `settings={...}` and the handler decodes the
+    /// same JSON a hand-typed `settings set settings='{"a":1}'` would produce.
+    private static func stringify(_ value: Any) -> String {
+        guard value is [String: Any] || value is [Any],
+              let data = try? JSONSerialization.data(withJSONObject: value),
+              let json = String(data: data, encoding: .utf8) else { return "\(value)" }
+        return json
     }
 
     /// Runs a command's handler on the main thread and waits for its response.

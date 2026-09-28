@@ -88,7 +88,7 @@ playing it, `play(_:completion:)` plays one already prepared); a voice that cann
 |---|---|---|---|
 | `KokoroVoice` | on this Mac (Kokoro-82M on MLX, Apple silicon); audio stays in memory | the Kokoro model (`KokoroModels.manifest`, about 340 MB) | yes |
 | `SystemVoice` | on this Mac (`AVSpeechSynthesizer`) | nothing; the fallback | no |
-| `GrokVoice` | xAI's text to speech (`https://api.x.ai/v1/tts`); sends only the text | an xAI API key | no |
+| `GrokVoice` | xAI's text to speech (`https://api.x.ai/v1/tts`); sends only the text | an xAI API key | yes |
 
 `SpeechVoices.make(for:kokoroModelDirectory:secrets:)` builds the voice
 `VoiceSettings.effectiveReplyVoice` chooses: the preferred one, or the system voice when Kokoro
