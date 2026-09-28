@@ -92,7 +92,7 @@ public struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     public var permissions: AgentPermissions?
     public var route: AgentRoute?
     public var timing: AgentTiming?
-    /// Absent from companions that predate pluggable runtimes, which always run Codex.
+    /// The runtime id; a snapshot without one comes from a companion running Codex.
     public var runtime: String?
     public var capabilities: AgentCapabilities?
 

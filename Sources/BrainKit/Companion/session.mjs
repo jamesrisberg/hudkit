@@ -18,7 +18,7 @@ export class Session {
     this.hasSavedPermissions = saved.permissions !== undefined;
     this.permissions = saved.permissions ?? { mode: 'approvedFolders', approvedFolders: [cwd] };
     // State of runtimes that are not active, so switching back resumes their conversation.
-    // A state file without `runtime` predates pluggable runtimes and belongs to Codex.
+    // A state file without `runtime` belongs to Codex.
     this.conversations = saved.conversations && typeof saved.conversations === 'object' ? { ...saved.conversations } : {};
     const savedRuntime = typeof saved.runtime === 'string' ? saved.runtime : 'codex';
     const { permissions: _p, requestIds: _r, receipt: _c, runtime: _n, conversations: _s, cwd: _w, ...runtimeState } = saved;
