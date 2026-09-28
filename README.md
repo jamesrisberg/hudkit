@@ -43,6 +43,7 @@ Check HUDKit out next to the apps (`~/dev/hudkit` beside `~/dev/sift`) and depen
 | Dock | `HUDDockPosition`, `HUDDockLayout`, `HUDDockAxis`, `HUDDockAlignment`, `HUDDockRegistry`, `HUDDockStyle`, `HUDDockPlacement`, `HUDDockStripView` / `HUDDockStrip`, `HUDDockTile`, `HUDDockItem` |
 | Chrome | `HUDGlassView`, `HUDGlass` / `.hudGlass()`, `HUDGlossView`, `HUDPanelWindow` |
 | Motion | `HUDSpring`, `HUDAnimation`, `HUDParking`, `HUDEdge` |
+| Notch | `HUDNotchGeometry`, `HUDFullscreenObserver`, `HUDScreenSnapshot` |
 | Hotkeys | `HUDHotKey`, `HUDHotKeyCenter` |
 | Menu bar | `HUDStatusIcon`, `HUDMenuBridge`, `HUDStatusItemPolicy`, `HUDMenuHost` |
 
@@ -84,6 +85,25 @@ normal window (normal level, activates its app, current Space, Dock tile while s
 `reason=hover`. `HUDAnimation.reveal/conceal` use the 0.22 s ease-out / 0.18 s ease-in timings;
 `HUDParking.offScreenFrame(for:edge:peek:)`, `restFrame(for:in:)`, `slideOut`/`slideIn` park a
 window against a screen edge with a visible sliver.
+
+### Notch anchor
+
+`HUDNotchGeometry` is pure frame math (no `NSScreen` needed, so it is unit-testable): given a
+screen's `frame`, `visibleFrame`, `safeAreaInsetTop` and `notchWidth`, `notchRect` gives the
+camera housing's rect (nil without one) and `anchorFrame(for:)` gives the frame for a panel of a
+given size, centered under the notch — or, on a screen without one (or behind a full-screen app,
+which hides the menu bar and grows `visibleFrame` to the screen edge), hanging from the menu bar
+instead. `HUDNotchGeometry(screen:)` reads the live values.
+
+`HUDPanelWindow.anchorUnderNotch(size:on:)` moves a panel to that frame and raises it to
+`HUDPanelWindow.notchAnchorLevel` (`.statusBar`) so it draws above the menu bar layer
+(`.mainMenu`); call it again after a resize or a screen change.
+
+`HUDFullscreenObserver` publishes, per screen, whether the frontmost app is full screen there
+(`isFullScreen(screenID:)`, `onChange`), so a host can hide or fall back a notch-anchored panel
+while a full-screen app owns that part of the screen. It re-evaluates on `NSWorkspace`
+app-activation and active-Space-change notifications; `screensProvider` is the injected source
+for tests, defaulting to `NSScreen.screens`.
 
 ## MacHUD contract
 
