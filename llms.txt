@@ -13,6 +13,7 @@
 ## Reference
 
 - [README](README.md): HUDKit's types, chrome, dock geometry
+- [VoiceKit](docs/VOICEKIT.md): the voice package in Kits/VoiceKit: wake word, trigger phrases, reply voices, voice settings; how to test it
 - [Changelog](CHANGELOG.md): HUDKit and contract versions
 - [App template](Templates/App): what hud-new-app.sh instantiates
 - [Scripts](scripts): hud-new-app.sh, hud-build.sh, hud-install.sh, hud-icon.sh, hud-ci.yml (usage in each header)
