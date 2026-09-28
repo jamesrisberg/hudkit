@@ -16,6 +16,13 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   whether the frontmost app is full screen there, from positive window evidence (a layer-0
   window owned by the frontmost app sized to the screen's full frame), for a host to hide or
   fall back a notch-anchored panel.
+- `HUDNotchGeometry.bodyPath(width:height:bottomRadius:)`: the notch-body shape a host draws
+  extending the camera housing downward (square top corners, rounded bottom corners), so every
+  app that needs the look shares one copy instead of porting it by hand.
+- A socket request's `args` can now carry an object or array value (`args: {"settings": {…}}`):
+  it arrives at the handler as that value's JSON text instead of Swift's plain description, so a
+  client can send structured settings over the socket and the handler decodes real JSON. A
+  string value is unaffected either way.
 
 **BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
 - A local agent brain for any app: Codex, Claude Code or Hermes behind a Node.js companion
@@ -48,6 +55,12 @@ fetch or build it)
 - Reply voices behind one protocol: Kokoro on the Mac, the Mac's system voices, and Grok
   (xAI's cloud voice), with the system voice as the fallback, and sentence-by-sentence speech
   of a reply as it streams in (`SpeechStreamer`).
+- Spoken replies read cleanly: markdown formatting (headings, emphasis, list markers, links) is
+  stripped before a sentence is spoken, inline code is read as plain words, and fenced code
+  blocks are skipped entirely instead of being read aloud.
+- Kokoro and Grok both synthesize the next sentence while the current one plays, so a reply
+  spoken sentence by sentence has no gap, and no flicker in the "speaking" indicator, between
+  sentences.
 - `VoiceSettings`: wake word on/off, phrase and sensitivity, reply voice, spoken replies (off by
   default) and each voice's options; the Grok key is kept in the Keychain, not in settings.
 - Verified model downloads (`ModelStore`): pinned sizes and checksums, reuse of identical files

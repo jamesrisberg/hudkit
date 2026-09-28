@@ -145,8 +145,77 @@ struct GrokVoiceTests {
         #expect(second.fakePlaying)
         voice.playback.audioPlayerDidFinishPlaying(second, successfully: true)
         while newCompletions == 0 { await Task.yield() }
-        #expect(events == [true, false, true, false])
+        // The final `false` is reported on the next main-actor turn (see
+        // `seamlessPlaybackReportsOneUninterruptedSpan` below): nothing calls `play()` here, so
+        // it lands shortly after rather than inside this same completion.
+        try await eventually { events == [true, false, true, false] }
         #expect(newCompletions == 1)
+    }
+
+    @Test func seamlessPlaybackReportsOneUninterruptedSpan() async throws {
+        let first = try FakePlayer(data: silentWave())
+        let second = try FakePlayer(data: silentWave())
+        var players = [first, second]
+        let voice = grok(requester: { _ in Data([1]) }, makePlayer: { _ in players.removeFirst() })
+        var events: [Bool] = []
+        voice.onSpeakingChanged = { events.append($0) }
+        var prepared: SpeechClip?
+        var secondCompletions = 0
+        // Wired exactly as `SpeechStreamer.speakNext()` wires it: the first clip's completion
+        // plays the already-prepared next clip synchronously, before ever returning.
+        voice.speak("first") { _ in
+            if let clip = prepared { voice.play(clip) { _ in secondCompletions += 1 } }
+        }
+        while events.isEmpty { await Task.yield() }
+        #expect(events == [true])
+        // Prepare the next clip ahead of time, exactly as `SpeechStreamer` does while the first
+        // one plays.
+        voice.prepare("second") { result in prepared = try? result.get() }
+        try await eventually { prepared != nil }
+        // The first clip's natural end synchronously plays the second: `ClipPlayback` must
+        // coalesce the two into one uninterrupted `true`, with no `false` in between.
+        voice.playback.audioPlayerDidFinishPlaying(first, successfully: true)
+        while !second.fakePlaying { await Task.yield() }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(events == [true])
+        voice.stop()
+        #expect(events == [true, false])
+        #expect(secondCompletions == 0)  // stopped, not finished
+    }
+
+    @Test func prepareFetchesWithoutPlayingAndAReplacementCancelsTheEarlierOne() async throws {
+        var requests: [String] = []
+        var continuations: [CheckedContinuation<Data, Error>] = []
+        let voice = grok(requester: { request in
+            let body = try! JSONSerialization.jsonObject(with: request.httpBody!) as! [String: Any]
+            requests.append(body["text"] as! String)
+            return try await withCheckedThrowingContinuation { continuations.append($0) }
+        })
+        var oldResults = 0
+        var newClip: SpeechClip?
+        voice.prepare("Old") { _ in oldResults += 1 }
+        while continuations.count < 1 { await Task.yield() }
+        voice.prepare("New") { result in newClip = try? result.get() }
+        while continuations.count < 2 { await Task.yield() }
+        continuations[0].resume(returning: Data([9]))
+        for _ in 0..<10 { await Task.yield() }
+        #expect(oldResults == 0, "a replaced prepare never completes")
+        continuations[1].resume(returning: Data([1, 2, 3]))
+        try await eventually { newClip != nil }
+        #expect(requests == ["Old", "New"])
+        #expect(newClip == SpeechClip(audio: Data([1, 2, 3])))
+    }
+
+    @Test func stopCancelsAPendingPrepare() async throws {
+        var continuation: CheckedContinuation<Data, Error>?
+        let voice = grok(requester: { _ in try await withCheckedThrowingContinuation { continuation = $0 } })
+        var results = 0
+        voice.prepare("Hello") { _ in results += 1 }
+        while continuation == nil { await Task.yield() }
+        voice.stop()
+        continuation?.resume(returning: Data([1]))
+        for _ in 0..<10 { await Task.yield() }
+        #expect(results == 0)
     }
 
     @Test func transportRejectsHTTPErrorsEmptyAndOversizedBodies() async throws {
