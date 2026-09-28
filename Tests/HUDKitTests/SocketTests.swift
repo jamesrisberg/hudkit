@@ -196,6 +196,29 @@ final class SocketTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: server.path))
     }
 
+    func testNestedArgumentValuesReserializeAsJSON() throws {
+        let client = HUDSocketClient(path: server.path, timeout: 5)
+        let settings: [String: Any] = ["voice": ["wakeWordEnabled": true, "sensitivity": 0.5], "tags": ["a", "b"]]
+        let r = try offMain { try client.request("echo", args: ["settings": settings, "n": 5, "name": "orb"]) }
+        let args = try XCTUnwrap(r["args"] as? [String: String], "arg values still arrive as strings")
+        XCTAssertEqual(args["n"], "5", "scalars still render as today")
+        XCTAssertEqual(args["name"], "orb")
+        let decoded = try XCTUnwrap(args["settings"]?.data(using: .utf8))
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: decoded) as? [String: Any])
+        XCTAssertEqual(object["voice"] as? [String: AnyHashable], ["wakeWordEnabled": true, "sensitivity": 0.5])
+        XCTAssertEqual(object["tags"] as? [String], ["a", "b"])
+    }
+
+    func testAStringArgumentValueIsPassedThroughUnchanged() throws {
+        // MacHUD's voice host decodes `settings` from a JSON string typed on the CLI
+        // (`settings set settings='{"a":1}'`); a string value must stay a plain string, not be
+        // treated as JSON to re-encode.
+        let client = HUDSocketClient(path: server.path, timeout: 5)
+        let r = try offMain { try client.request("echo", args: ["settings": "{\"a\":1}"]) }
+        let args = try XCTUnwrap(r["args"] as? [String: String])
+        XCTAssertEqual(args["settings"], "{\"a\":1}")
+    }
+
     func testParseArguments() {
         XCTAssertEqual(HUDSocketClient.parseArguments(["id=dock", "show", "expr=a=b"]),
                        ["id": "dock", "show": "1", "expr": "a=b", "_": "show"])
