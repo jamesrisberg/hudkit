@@ -7,6 +7,22 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Added
+
+**VoiceKit** (a new product; apps that import only HUDKit do not build it)
+- Wake word detection on the Mac with openWakeWord models, fed by the app's own microphone
+  audio (`WakeListener`, `InProcessWakeDetector`, `OpenWakeWordEngine`). Wake models download
+  only when asked; "Hey Jarvis" is for personal, non-commercial use and is never bundled.
+- Trigger phrases: a list of phrases, each mapped to an action, matched from a wake model or
+  from the start of a transcript ("Hey Computer" starts an agent turn).
+- Reply voices behind one protocol: Kokoro on the Mac, the Mac's system voices, and Grok
+  (xAI's cloud voice), with the system voice as the fallback, and sentence-by-sentence speech
+  of a reply as it streams in (`SpeechStreamer`).
+- `VoiceSettings`: wake word on/off, phrase and sensitivity, reply voice, spoken replies (off by
+  default) and each voice's options; the Grok key is kept in the Keychain, not in settings.
+- Verified model downloads (`ModelStore`): pinned sizes and checksums, reuse of identical files
+  another app already downloaded, and a one-time check of a complete folder installed elsewhere.
+
 ## [0.1.0] - 2026-09-27
 
 The shared contract, visual language and build tooling for MacHUD apps, contract version 0.1.

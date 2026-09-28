@@ -11,6 +11,8 @@ look the same:
 
 - `Sources/HUDKit`: the control socket, manifest, contract router, dock geometry, settings
   schema, glass chrome, motion and hotkeys.
+- `Sources/VoiceKit`: a separate product for voice: wake word, trigger phrases, reply voices
+  (Kokoro, the Mac's voices, Grok) and voice settings; see [docs/VOICEKIT.md](docs/VOICEKIT.md).
 - `scripts/`: `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh` and the `hud-ci.yml` workflow.
 - `Templates/App`: a minimal complete app that `hud-new-app.sh` instantiates.
 - [docs/](docs/README.md): the [contract spec](docs/CONTRACT.md), the
@@ -202,4 +204,5 @@ directory.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE). `Vendor/Kokoro` (used by VoiceKit) is Apache-2.0, see its
+[LICENSE](Vendor/Kokoro/LICENSE) and [PROVENANCE.md](Vendor/Kokoro/PROVENANCE.md).
