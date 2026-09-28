@@ -10,6 +10,7 @@ needed ([../llms.txt](../llms.txt) lists the same).
 | [CLI.md](CLI.md) | The `<repo>` CLIs: where they live, argument grammar, output and exit codes, `<REPO>_SOCKET`, each app's shorthands, raw `nc -U`, and `machud` |
 | [CONVENTIONS.md](CONVENTIONS.md) | The layout every MacHUD app repo follows: names, targets, resources, env isolation, build/install shims, README sections, versions, commits, starting a new app, and where the current apps differ |
 | [../Kits/BrainKit/README.md](../Kits/BrainKit/README.md) | The BrainKit package: running the Node brain companion (Codex, Claude Code, Hermes), `BrainService`, `BrainSettings`, the session client and transcript model, packaging and tests |
+| [VOICEKIT.md](VOICEKIT.md) | VoiceKit, the voice package in `Kits/VoiceKit`: wake word, trigger phrases, reply voices, voice settings, model downloads, and how its tests run |
 | [../README.md](../README.md) | HUDKit itself: the types an app gets, the contract in brief, the dock, the settings schema, the glass chrome |
 | [../CHANGELOG.md](../CHANGELOG.md) | HUDKit's releases |
 | [../scripts/](../scripts) | `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh`, `hud-icon.sh`, `hud-ci.yml` (usage in each script's header) |

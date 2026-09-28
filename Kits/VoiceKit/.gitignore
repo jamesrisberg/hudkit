@@ -1,0 +1,4 @@
+.build/
+.swiftpm/
+# A library package: the consuming app pins versions.
+Package.resolved
