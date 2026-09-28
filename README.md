@@ -43,7 +43,7 @@ Check HUDKit out next to the apps (`~/dev/hudkit` beside `~/dev/sift`) and depen
 | Dock | `HUDDockPosition`, `HUDDockLayout`, `HUDDockAxis`, `HUDDockAlignment`, `HUDDockRegistry`, `HUDDockStyle`, `HUDDockPlacement`, `HUDDockStripView` / `HUDDockStrip`, `HUDDockTile`, `HUDDockItem` |
 | Chrome | `HUDGlassView`, `HUDGlass` / `.hudGlass()`, `HUDGlossView`, `HUDPanelWindow` |
 | Motion | `HUDSpring`, `HUDAnimation`, `HUDParking`, `HUDEdge` |
-| Notch | `HUDNotchGeometry`, `HUDFullscreenObserver`, `HUDScreenSnapshot` |
+| Notch | `HUDNotchGeometry`, `HUDFullscreenObserver`, `HUDScreenSnapshot`, `HUDWindowSnapshot` |
 | Hotkeys | `HUDHotKey`, `HUDHotKeyCenter` |
 | Menu bar | `HUDStatusIcon`, `HUDMenuBridge`, `HUDStatusItemPolicy`, `HUDMenuHost` |
 
@@ -101,9 +101,14 @@ instead. `HUDNotchGeometry(screen:)` reads the live values.
 
 `HUDFullscreenObserver` publishes, per screen, whether the frontmost app is full screen there
 (`isFullScreen(screenID:)`, `onChange`), so a host can hide or fall back a notch-anchored panel
-while a full-screen app owns that part of the screen. It re-evaluates on `NSWorkspace`
-app-activation and active-Space-change notifications; `screensProvider` is the injected source
-for tests, defaulting to `NSScreen.screens`.
+while a full-screen app owns that part of the screen. A screen counts as full screen only on
+positive window evidence — a layer-0 window owned by the frontmost app whose bounds equal the
+screen's full frame (`HUDWindowSnapshot`, read from `CGWindowListCopyWindowInfo`, no Screen
+Recording permission needed) — not from `visibleFrame` alone, which an auto-hidden menu bar and
+Dock can also fill with no full-screen app running. It re-evaluates on `NSWorkspace`
+app-activation and active-Space-change notifications; `screensProvider`, `windowsProvider` and
+`frontmostApplicationPID` are the injected sources for tests, defaulting to `NSScreen.screens`,
+the live window list and `NSWorkspace`.
 
 ## MacHUD contract
 
