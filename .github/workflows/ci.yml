@@ -9,6 +9,15 @@ jobs:
       - uses: actions/checkout@v4
       - run: swift --version
       - run: swift test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: BrainKit
+        working-directory: Kits/BrainKit
+        run: swift test
+      - name: BrainKit companion
+        working-directory: Kits/BrainKit/Sources/BrainKit/Companion
+        run: node --test test/*.test.mjs
       # The shared scripts and the app template: generate an app next to this checkout,
       # then test and build it the way an app repo does.
       - name: Template app
