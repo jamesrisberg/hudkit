@@ -33,3 +33,24 @@ public protocol SpeechVoice: AnyObject {
     func speak(_ text: String, completion: @escaping (Result<Void, Error>) -> Void)
     func stop()
 }
+
+/// A clip `PrefetchingSpeechVoice.prepare(_:completion:)` already synthesized, ready to play
+/// with `play(_:completion:)` and no further synthesis delay. Opaque outside VoiceKit.
+public struct SpeechClip: Sendable, Equatable {
+    let audio: Data
+    public init(audio: Data) { self.audio = audio }
+}
+
+/// A voice that can synthesize a sentence ahead of when it is spoken, so `SpeechStreamer` can
+/// prepare the next sentence while an earlier one plays and move to it with no synthesis gap.
+/// Not every voice can (`SystemVoice` cannot): the streamer checks `voice as? (any
+/// PrefetchingSpeechVoice)` and falls back to `speak(_:completion:)` when it cannot.
+@MainActor
+public protocol PrefetchingSpeechVoice: SpeechVoice {
+    /// Synthesizes `text` without playing it. `completion` runs once, with the same failures
+    /// `speak(_:completion:)` would report; never after `stop()`.
+    func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void)
+    /// Plays a clip `prepare(_:completion:)` already produced, exactly like
+    /// `speak(_:completion:)` but without synthesizing again.
+    func play(_ clip: SpeechClip, completion: @escaping (Result<Void, Error>) -> Void)
+}

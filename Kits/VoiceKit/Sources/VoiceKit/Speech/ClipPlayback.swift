@@ -13,6 +13,11 @@ final class ClipPlayback: NSObject, AVAudioPlayerDelegate {
     private var player: AVAudioPlayer?
     private var meter: Timer?
     private var isSpeaking = false
+    /// Scheduled when a clip ends on its own, so the next main-actor turn can report
+    /// `onSpeakingChanged(false)`; `play()` cancels it first, so a `play()` that follows in
+    /// the same completion (prefetch's next sentence) coalesces the two clips into one
+    /// uninterrupted `true` instead of a false-then-true flicker.
+    private var pendingIdle: Task<Void, Never>?
     private var finished: ((Result<Void, Error>) -> Void)?
     private var playbackFailure: Error = CancellationError()
 
@@ -23,7 +28,9 @@ final class ClipPlayback: NSObject, AVAudioPlayerDelegate {
     /// Starts `audio`, replacing any clip playing. `finished` runs once when the clip ends,
     /// unless `stop()` comes first. Throws `failure` when the clip cannot start.
     func play(_ audio: Data, failure: Error, finished: @escaping (Result<Void, Error>) -> Void) throws {
-        stop()
+        pendingIdle?.cancel()
+        pendingIdle = nil
+        stopPlayer()
         let player: AVAudioPlayer
         do { player = try makePlayer(audio) } catch { throw failure }
         player.delegate = self
@@ -35,6 +42,7 @@ final class ClipPlayback: NSObject, AVAudioPlayerDelegate {
         }
         playbackFailure = failure
         self.finished = finished
+        let wasSpeaking = isSpeaking
         isSpeaking = true
         let identity = ObjectIdentifier(player)
         meter = Timer.scheduledTimer(withTimeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
@@ -44,27 +52,45 @@ final class ClipPlayback: NSObject, AVAudioPlayerDelegate {
                 self.onLevel?(min(1, max(0, pow(10, Double(player.averagePower(forChannel: 0)) / 20))))
             }
         }
-        onSpeakingChanged?(true)
+        if !wasSpeaking { onSpeakingChanged?(true) }
     }
 
-    /// Stops the clip without running its completion.
+    /// Stops the clip without running its completion, reporting the end of speaking at once
+    /// (unlike a clip ending on its own, an explicit stop is never coalesced).
     func stop() {
+        pendingIdle?.cancel()
+        pendingIdle = nil
         finished = nil
-        let wasSpeaking = isSpeaking
-        isSpeaking = false
+        stopPlayer()
+        onLevel?(0)
+        if isSpeaking {
+            isSpeaking = false
+            onSpeakingChanged?(false)
+        }
+    }
+
+    private func stopPlayer() {
         meter?.invalidate()
         meter = nil
         player?.stop()
         player = nil
-        onLevel?(0)
-        if wasSpeaking { onSpeakingChanged?(false) }
     }
 
     private func end(_ player: AVAudioPlayer, _ result: Result<Void, Error>) {
         guard let active = self.player, active === player else { return }
         let callback = finished
-        stop()
+        finished = nil
+        stopPlayer()
         callback?(result)
+        // A `play()` inside `callback` (prefetch's next sentence) already resumed playback;
+        // only report idle when nothing did.
+        guard self.player == nil, isSpeaking, pendingIdle == nil else { return }
+        pendingIdle = Task { @MainActor [weak self] in
+            guard let self, !Task.isCancelled else { return }
+            self.pendingIdle = nil
+            self.isSpeaking = false
+            self.onSpeakingChanged?(false)
+        }
     }
 
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
