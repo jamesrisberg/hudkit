@@ -11,6 +11,9 @@ look the same:
 
 - `Sources/HUDKit`: the control socket, manifest, contract router, dock geometry, settings
   schema, glass chrome, motion and hotkeys.
+- `Kits/BrainKit`: a separate Swift package, the local agent brain (Codex, Claude Code or
+  Hermes behind a bundled Node companion) with its launcher, client and transcript model;
+  see [its README](Kits/BrainKit/README.md).
 - `scripts/`: `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh` and the `hud-ci.yml` workflow.
 - `Templates/App`: a minimal complete app that `hud-new-app.sh` instantiates.
 - [docs/](docs/README.md): the [contract spec](docs/CONTRACT.md), the
@@ -199,6 +202,13 @@ echo '{"command":"hello"}' | nc -U ~/Library/Application\ Support/MacHUD/sockets
 
 ```sh
 swift test                  # HUDKitTests
+```
+
+Each kit in `Kits/` is its own package and is tested from its folder:
+
+```sh
+cd Kits/BrainKit && swift test                                        # BrainKitTests
+cd Kits/BrainKit/Sources/BrainKit/Companion && node --test test/*.test.mjs   # its Node companion
 ```
 
 CI runs the same on `macos-26` ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The

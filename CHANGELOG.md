@@ -17,6 +17,19 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   window owned by the frontmost app sized to the screen's full frame), for a host to hide or
   fall back a notch-anchored panel.
 
+**BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
+- A local agent brain for any app: Codex, Claude Code or Hermes behind a Node.js companion
+  (Node 22 or later, no npm packages) that ships inside BrainKit with its tests.
+- `BrainService` finds Node.js, launches and supervises the companion from a plain
+  `BrainServiceConfiguration` (runtime, workspace, state directory, port, tool paths, assistant
+  name), restarts it with backoff, stops it with the app, and hands out `AgentSessionClient`s.
+- `BrainSettings`, the Codable brain choice and per-runtime options a settings tab binds to.
+- `AgentSessionClient` (turns, approvals, cancel, reset, runtime switch, folder permissions),
+  `TranscriptModel` for rendering a conversation, `ManagedService`, `ExecutableLocator` and
+  `BrainCatalog`.
+- The companion's `--assistant-name` names the assistant in its voice instructions; without it
+  the instructions name none. Its environment variables use the `BRAINKIT_` prefix.
+
 ## [0.1.0] - 2026-09-27
 
 The shared contract, visual language and build tooling for MacHUD apps, contract version 0.1.
