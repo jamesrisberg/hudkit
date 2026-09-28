@@ -126,11 +126,53 @@ final class ServiceSupervisorTests: XCTestCase {
         let old = launcher.last
         service.configure(.success(changed))
         XCTAssertTrue(old.terminated)
+        // The new process waits for the old one to exit, so the port is free.
+        XCTAssertEqual(launcher.launched.count, 1)
+        XCTAssertEqual(service.state, .starting)
+        // The replaced process exiting does not count as a crash.
+        old.exit(0)
         XCTAssertEqual(launcher.launched.count, 2)
         XCTAssertEqual(launcher.specs.last, changed)
-        // The replaced process exiting later does not count as a crash.
-        old.exit(0)
         XCTAssertEqual(service.state, .starting)
+        XCTAssertEqual(service.failures, 0)
+    }
+
+    func testRestartWaitsForTheOldProcessButNotForever() {
+        let launcher = FakeLauncher()
+        let scheduler = FakeScheduler()
+        let service = make(launcher, scheduler)
+        service.configure(.success(spec))
+        launcher.last.say("ready at")
+        service.restart()
+        XCTAssertTrue(launcher.last.terminated)
+        XCTAssertEqual(launcher.launched.count, 1)
+        scheduler.advance(9)
+        XCTAssertEqual(launcher.launched.count, 1)
+        // An old process that never reports its exit does not block the service.
+        scheduler.advance(1)
+        XCTAssertEqual(launcher.launched.count, 2)
+        launcher.launched[0].exit(0)
+        XCTAssertEqual(launcher.launched.count, 2)
+        XCTAssertEqual(service.state, .starting)
+    }
+
+    func testStopWhileWaitingLaunchesNothingAndALaterStartStillWaits() {
+        let launcher = FakeLauncher()
+        let scheduler = FakeScheduler()
+        let service = make(launcher, scheduler)
+        service.configure(.success(spec))
+        let first = launcher.last
+        var changed = spec
+        changed.arguments.append("--x")
+        service.configure(.success(changed))
+        service.stop()
+        XCTAssertEqual(service.state, .stopped)
+        service.configure(.success(spec))
+        XCTAssertEqual(launcher.launched.count, 1)
+        first.exit(0)
+        XCTAssertEqual(launcher.launched.count, 2)
+        scheduler.advance(30)
+        XCTAssertEqual(launcher.launched.count, 2)
     }
 
     func testMissingReadinessLineTerminatesAndRetries() {

@@ -28,8 +28,8 @@ public protocol ServiceProcess: AnyObject {
 @MainActor
 public protocol ProcessLaunching {
     func launch(
-        _ spec: ProcessSpec, onOutput: @escaping @MainActor (String) -> Void,
-        onExit: @escaping @MainActor (Int32) -> Void
+        _ spec: ProcessSpec, onOutput: @escaping @Sendable @MainActor (String) -> Void,
+        onExit: @escaping @Sendable @MainActor (Int32) -> Void
     ) throws -> ServiceProcess
 }
 
@@ -84,6 +84,8 @@ public final class ManagedService: ObservableObject, Identifiable {
         public var readinessTimeout: TimeInterval = 45
         /// Running this long resets the failure count.
         public var stableAfter: TimeInterval = 60
+        /// Longest wait for a replaced process to exit before its successor starts anyway.
+        public var exitWait: TimeInterval = 10
 
         public init() {}
     }
@@ -103,6 +105,12 @@ public final class ManagedService: ObservableObject, Identifiable {
     private var process: ServiceProcess?
     public var processIdentifier: Int32? { process?.processIdentifier }
     private var generation = 0
+    /// Generation of a replaced process that has not reported its exit yet. The next process
+    /// waits for it, so the port and state directory are free.
+    private var retiring: Int?
+    private var launchWhenRetired = false
+    /// Kept apart from `timers`: launching must not cancel it.
+    private var retireTimer: ScheduledAction?
     public private(set) var failures = 0
     private var timers: [ScheduledAction] = []
     private var lastLine = ""
@@ -165,6 +173,11 @@ public final class ManagedService: ObservableObject, Identifiable {
     private func launch() {
         guard let spec else { return }
         cancelTimers()
+        if retiring != nil {
+            launchWhenRetired = true
+            state = .starting
+            return
+        }
         generation += 1
         let current = generation
         lastLine = ""
@@ -178,8 +191,8 @@ public final class ManagedService: ObservableObject, Identifiable {
                     self.received(line)
                 },
                 onExit: { [weak self] code in
-                    guard let self, self.generation == current else { return }
-                    self.exited(code)
+                    guard let self else { return }
+                    if self.generation == current { self.exited(code) } else { self.retired(current) }
                 })
         } catch {
             process = nil
@@ -235,11 +248,32 @@ public final class ManagedService: ObservableObject, Identifiable {
     }
 
     private func stopProcess() {
+        let stopped = generation
         generation += 1
         cancelTimers()
-        process?.terminate()
+        launchWhenRetired = false
+        if let process {
+            process.terminate()
+            retiring = stopped
+            retireTimer?.cancel()
+            retireTimer = scheduler.schedule(after: policy.exitWait) { [weak self] in
+                self?.retired(stopped)
+            }
+        }
         process = nil
         lastLine = ""
+    }
+
+    /// The replaced process of `generation` exited (or took too long): start its successor.
+    private func retired(_ generation: Int) {
+        guard retiring == generation else { return }
+        retiring = nil
+        retireTimer?.cancel()
+        retireTimer = nil
+        if launchWhenRetired {
+            launchWhenRetired = false
+            launch()
+        }
     }
 
     private func cancelTimers() {
@@ -257,7 +291,54 @@ public final class ManagedService: ObservableObject, Identifiable {
 
 /// Launches with `Process`, stdout and stderr merged into one line stream.
 public final class FoundationProcessLauncher: ProcessLaunching {
-    private final class Running: ServiceProcess {
+    /// How long an exit waits for the output to reach end-of-file.
+    static let outputGrace: TimeInterval = 1
+
+    private final class ExitStatus: @unchecked Sendable {
+        private let lock = NSLock()
+        private var code: Int32 = 0
+        var value: Int32 {
+            get { lock.lock(); defer { lock.unlock() }; return code }
+            set { lock.lock(); code = newValue; lock.unlock() }
+        }
+    }
+
+    /// Splits output into lines and posts each to the main queue; `finish` flushes a final
+    /// partial line once, whichever of end-of-file and the grace timer comes first.
+    private final class OutputReader: @unchecked Sendable {
+        private let lock = NSLock()
+        private let splitter = LineSplitter()
+        private var finished = false
+        private let onOutput: @Sendable @MainActor (String) -> Void
+
+        init(onOutput: @escaping @Sendable @MainActor (String) -> Void) { self.onOutput = onOutput }
+
+        func feed(_ data: Data) {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return }
+            post(splitter.feed(data))
+        }
+
+        /// True for the first caller only.
+        func finish() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return false }
+            finished = true
+            post(splitter.flush())
+            return true
+        }
+
+        private func post(_ lines: [String]) {
+            let onOutput = self.onOutput
+            for line in lines {
+                DispatchQueue.main.async { MainActor.assumeIsolated { onOutput(line) } }
+            }
+        }
+    }
+
+    final class Running: ServiceProcess {
         let process: Process
         /// Held open for the child's lifetime. A child that watches its stdin (the companion
         /// with `BRAINKIT_PARENT_PIPE=1`) exits when it closes, so it never outlives the host,
@@ -284,8 +365,8 @@ public final class FoundationProcessLauncher: ProcessLaunching {
     public nonisolated init() {}
 
     public func launch(
-        _ spec: ProcessSpec, onOutput: @escaping @MainActor (String) -> Void,
-        onExit: @escaping @MainActor (Int32) -> Void
+        _ spec: ProcessSpec, onOutput: @escaping @Sendable @MainActor (String) -> Void,
+        onExit: @escaping @Sendable @MainActor (Int32) -> Void
     ) throws -> ServiceProcess {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: spec.executable)
@@ -299,21 +380,43 @@ public final class FoundationProcessLauncher: ProcessLaunching {
         process.standardOutput = output
         process.standardError = output
         process.standardInput = input
-        let splitter = LineSplitter()
+        let reader = OutputReader(onOutput: onOutput)
+        // The exit is delivered once the process has exited and its output reached end-of-file,
+        // so the last lines (often the reason it failed) arrive first. Lines and the exit go
+        // through the main queue in order.
+        let finished = DispatchGroup()
+        finished.enter()
+        finished.enter()
+        let status = ExitStatus()
         output.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                return
+                if reader.finish() { finished.leave() }
+            } else {
+                reader.feed(data)
             }
-            for line in splitter.feed(data) { Task { @MainActor in onOutput(line) } }
         }
-        process.terminationHandler = { finished in
-            output.fileHandleForReading.readabilityHandler = nil
-            let status = finished.terminationStatus
-            Task { @MainActor in onExit(status) }
+        process.terminationHandler = { process in
+            status.value = process.terminationStatus
+            finished.leave()
+            // A grandchild that inherited the output can hold it open; do not wait for it long.
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.outputGrace) {
+                guard reader.finish() else { return }
+                output.fileHandleForReading.readabilityHandler = nil
+                finished.leave()
+            }
+        }
+        finished.notify(queue: .main) {
+            let code = status.value
+            MainActor.assumeIsolated { onExit(code) }
         }
         try process.run()
+        // Only the child gets these pipes. A helper the host spawns later must not inherit the
+        // write end of the child's stdin, or the child would outlive a crashed host.
+        for descriptor in [input.fileHandleForWriting.fileDescriptor, output.fileHandleForReading.fileDescriptor] {
+            _ = fcntl(descriptor, F_SETFD, fcntl(descriptor, F_GETFD) | FD_CLOEXEC)
+        }
         return Running(process: process, stdin: input)
     }
 }
@@ -337,6 +440,12 @@ public final class LineSplitter: @unchecked Sendable {
             buffer.removeAll()
         }
         return lines
+    }
+
+    /// The final partial line, if any, at end-of-stream.
+    public func flush() -> [String] {
+        defer { buffer.removeAll() }
+        return buffer.isEmpty ? [] : [String(decoding: buffer, as: UTF8.self)]
     }
 }
 

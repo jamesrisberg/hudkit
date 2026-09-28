@@ -27,8 +27,8 @@ final class FakeLauncher: ProcessLaunching {
     struct LaunchError: LocalizedError { var errorDescription: String? { "no such file" } }
 
     func launch(
-        _ spec: ProcessSpec, onOutput: @escaping @MainActor (String) -> Void,
-        onExit: @escaping @MainActor (Int32) -> Void
+        _ spec: ProcessSpec, onOutput: @escaping @Sendable @MainActor (String) -> Void,
+        onExit: @escaping @Sendable @MainActor (Int32) -> Void
     ) throws -> ServiceProcess {
         specs.append(spec)
         if failNext {
