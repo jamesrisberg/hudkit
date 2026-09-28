@@ -126,6 +126,8 @@ struct KokoroVoiceTests {
         #expect(completions == 0)
         #expect(oldCompletions == 0)
         #expect(second.fakePlaying)
+        var levels: [Double] = []
+        voice.onLevel = { levels.append($0) }
         voice.playback.audioPlayerDidFinishPlaying(second, successfully: true)
         while completions == 0 { await Task.yield() }
         // The final `false` is reported on the next main-actor turn (see
@@ -133,6 +135,8 @@ struct KokoroVoiceTests {
         // so it lands shortly after rather than inside this same completion.
         try await eventually { events == [true, false, true, false] }
         #expect(!second.fakePlaying)
+        // A clip that ends on its own also brings the output level back to zero.
+        #expect(levels.last == 0)
     }
 
     @Test func seamlessPlaybackReportsOneUninterruptedSpan() async throws {
