@@ -1,6 +1,6 @@
 import Foundation
 
-/// Finds the Node companion BrainKit ships as a resource (`HUDKit_BrainKit.bundle`,
+/// Finds the Node companion BrainKit ships as a resource (`BrainKit_BrainKit.bundle`,
 /// folder `Companion`).
 ///
 /// SwiftPM puts the resource bundle next to the built executable or test bundle; an app
@@ -8,7 +8,7 @@ import Foundation
 /// source checkout, and never traps (SwiftPM's generated `Bundle.module` does when the
 /// bundle is missing).
 public enum BrainCompanion {
-    public static let bundleName = "HUDKit_BrainKit.bundle"
+    public static let bundleName = "BrainKit_BrainKit.bundle"
     public static let folderName = "Companion"
 
     /// The companion folder, or nil when no copy is found.

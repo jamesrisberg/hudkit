@@ -2,10 +2,10 @@
 
 This Node process connects a macOS host app to a tool-capable agent runtime (the
 "brain"). It ships inside BrainKit as a resource (`Companion/` in the
-`HUDKit_BrainKit.bundle`), and a host app runs it through BrainKit's `BrainService`:
+`BrainKit_BrainKit.bundle`), and a host app runs it through BrainKit's `BrainService`:
 `node server.mjs --cwd <workspace> --runtime <choice> --state-dir <private state> --port <port>`,
 restarting it with backoff and reading the token file directly (see
-[docs/BRAINKIT.md](../../../docs/BRAINKIT.md)). Running it by hand, as below, is the
+[BrainKit's README](../../../README.md)). Running it by hand, as below, is the
 manual mode. Audio stays in the host app's local speech pipeline; this service
 accepts only text. The runtime sends that text and relevant tool context to its
 configured model provider and keeps its own conversation history on disk.
@@ -275,7 +275,7 @@ signed-in status; it does not start a model turn.
 
 The Swift side (client, transcript, supervisor, launcher, and a smoke test that runs
 this companion with `test/fixtures/fake-codex.mjs` through one turn) runs from the
-HUDKit repository root:
+BrainKit package (`Kits/BrainKit` in the HUDKit repository):
 
 ```sh
 swift test --filter BrainKitTests

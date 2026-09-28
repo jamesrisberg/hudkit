@@ -2,12 +2,12 @@
 
 BrainKit gives a macOS app a local agent "brain": Codex, Claude Code or Hermes, reached
 through a small Node service (the companion) that the app launches, supervises and talks to
-over loopback HTTP. It is a separate product of this package; an app that imports only HUDKit
-does not build it.
+over loopback HTTP. It is its own Swift package in the HUDKit repository (`Kits/BrainKit`); an app that
+depends only on HUDKit does not fetch or build it.
 
 ```swift
-.package(path: "../hudkit")
-.product(name: "BrainKit", package: "hudkit")
+.package(path: "../hudkit/Kits/BrainKit")
+.product(name: "BrainKit", package: "BrainKit")
 ```
 
 BrainKit depends on Foundation, Combine and CryptoKit only. The companion needs Node.js 22 or
@@ -104,14 +104,14 @@ own state, changed with `AgentSessionClient.setPermissions(_:)` while idle.
 ## The companion
 
 The companion lives in `Sources/BrainKit/Companion` and ships in the target's resource bundle,
-`HUDKit_BrainKit.bundle` (folder `Companion`), with its Node tests. `BrainCompanion.directory`
+`BrainKit_BrainKit.bundle` (folder `Companion`), with its Node tests. `BrainCompanion.directory`
 finds it in the app's `Contents/Resources`, next to the executable or test bundle (`swift run`,
 `swift test`), then in the source checkout. `hud-build.sh` does not copy SwiftPM resource
-bundles, so an app that ships BrainKit copies `.build/<configuration>/HUDKit_BrainKit.bundle`
+bundles, so an app that ships BrainKit copies `.build/<configuration>/BrainKit_BrainKit.bundle`
 into `Contents/Resources` itself.
 
 Its HTTP contract, the runtime interface, each brain's transport and approvals, and the voice
-instructions are documented in [Companion/README.md](../Sources/BrainKit/Companion/README.md).
+instructions are documented in [Companion/README.md](Sources/BrainKit/Companion/README.md).
 Names the companion uses:
 
 | Name | Meaning |
@@ -126,8 +126,10 @@ Names the companion uses:
 
 ## Tests
 
+From `Kits/BrainKit`:
+
 ```sh
-swift test --filter BrainKitTests                                   # Swift side, plus a live turn
+swift build && swift test                                           # Swift side, plus a live turn
 (cd Sources/BrainKit/Companion && node --test test/*.test.mjs)      # companion
 ```
 
