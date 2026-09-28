@@ -23,6 +23,10 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   it arrives at the handler as that value's JSON text instead of Swift's plain description, so a
   client can send structured settings over the socket and the handler decodes real JSON. A
   string value is unaffected either way.
+- `agent-sessions` manifest capability: a panel that shows agent sessions answers `action
+  name=open-session id=<sessionKey>` and a `sessions` command, so a client can ask "who shows
+  agent sessions" instead of naming an app. `HUDAgentSessions` and `HUDAgentSession` (see
+  `docs/CONTRACT.md` § Agent sessions).
 
 **BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
 - A local agent brain for any app: Codex, Claude Code or Hermes behind a Node.js companion

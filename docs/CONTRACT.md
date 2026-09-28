@@ -19,6 +19,7 @@ family app; **may** is optional.
 Contents: [Versioning](#versioning) · [Manifest](#manifest) · [Socket](#socket) ·
 [Verbs](#verbs) · [subscribe](#subscribe-and-state-events) · [Settings schema](#settings-schema) ·
 [docks.json](#docksjson) · [Behaviour](#behaviour-hover-and-windowed) · [File drops](#file-drops) ·
+[Agent sessions](#agent-sessions) ·
 [Launch announcement](#launch-announcement) · [Menu bar consolidation](#menu-bar-consolidation) ·
 [What MacHUD guarantees](#what-machud-guarantees) · [Compliance checklist](#compliance-checklist)
 
@@ -83,7 +84,7 @@ copies it into the bundle.
 | `order` | integer | no | none | Sort key within its `kind` group on the dock, ascending; panels without one come after those with one, in manifest order (`HUDManifest.dockSorted`). A non-integer is ignored. Family hover apps use 1-5; the template uses 90. |
 | `defaultSize` | `[width, height]` | no | none | Points. MacHUD uses it the first time it places or hover-shows the panel (else 420x480). |
 | `compactSize` | `[width, height]` | no | none | Size in `compact` mode, informational. |
-| `capabilities` | array of string | no | `[]` | Known value: `acceptsFileDrop` (see [File drops](#file-drops)). Unknown values are carried but ignored (Scratch lists `acceptsTextDrop`, which MacHUD does not use). |
+| `capabilities` | array of string | no | `[]` | Known values: `acceptsFileDrop` (see [File drops](#file-drops)) and `agent-sessions` (see [Agent sessions](#agent-sessions)). Unknown values are carried but ignored (Scratch lists `acceptsTextDrop`, which MacHUD does not use). |
 | `verbs` | array of string | no | `[]` | Informational list of what the panel supports beyond the required commands. **One value has an effect:** MacHUD places the panel with `panel frame` over the socket only when `verbs` is empty or contains `"frame"`; otherwise it moves the window through Accessibility. |
 | `settingsSchema` | string | no | none | Path of a [settings schema](#settings-schema) file relative to `Contents/Resources`. The first panel that names one is the app's schema. |
 
@@ -543,6 +544,27 @@ other apps.
   capability must handle `action drop`**; otherwise every drop fails with `unknown action drop`.
 - `machud tooldock drop id=<app> paths=<HUDDrop.encode or comma-separated plain paths>` performs
   the same drop from the shell.
+
+## Agent sessions
+
+- Opt in per panel with `"capabilities": ["agent-sessions"]` (`HUDAgentSessions.capability`) to
+  offer agent sessions (a coding agent's running/idle sessions, e.g. mechaclaude's) that another
+  app or the voice host can show and focus without naming this app.
+- The panel's app answers two things on its own socket, both app-specific (not part of the
+  required verbs):
+  - `action name=open-session id=<sessionKey>` (`HUDAgentSessions.openSessionAction`): show and
+    focus that session (`performAction`, like any other `action`). `sessionKey` is opaque to
+    MacHUD, provider-defined (mechaclaude's is `claude:<sessionId>`).
+  - `sessions` (`HUDAgentSessions.sessionsCommand`): a top-level command, registered like `state`,
+    answering `{"ok": true, "sessions": [{"id", "title", "cwd", "state"}, ...]}` — the sessions
+    the app currently shows. `state` is free-form (e.g. `idle`, `running`, `requires_action`).
+    `HUDAgentSession.parseAll(_:)` reads a reply; entries missing `id` or `state` are skipped.
+- MacHUD brokers the capability so a client can ask "who shows agent sessions" instead of naming
+  an app: `sessions providers` → `{"ok": true, "providers": [{"app", "socket", "running"}, ...]}`
+  (every discovered app with a panel declaring the capability), and `sessions open id=<sessionKey>`
+  → forwards `action open-session` to the first running provider (launching an installed one if
+  none runs) → `{"ok": true, "app": "<bundle id>"}`, or `{"ok": false, "error": "No app shows
+  agent sessions"}` when none is discovered. See MacHUD's `docs/API.md`.
 
 ## Launch announcement
 
