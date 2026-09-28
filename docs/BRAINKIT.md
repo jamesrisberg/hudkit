@@ -23,7 +23,7 @@ later on the user's Mac and no npm packages.
 | `AgentSessionClient` | Polls complete snapshots and sends turns, approvals, cancel, reset, runtime switches and permissions |
 | `AgentSessionSnapshot` and friends | `AgentRuntime`, `AgentPermissions`, `AgentCapabilities`, `AgentApproval`, `AgentRoute`, `AgentTiming`, `AgentSessionError` |
 | `TranscriptModel` | Reduces snapshots plus what the user said into transcript rows (user, reply, progress, approval, notice) and events (`turnStarted`, `firstOutput`, `approvalAdded`, `turnEnded`) |
-| `ManagedService` | Keeps one child process running: readiness line, exponential backoff (1 s doubling to 30 s), gives up after 6 failed starts, 45 s readiness timeout, failures reset after 60 s up |
+| `ManagedService` | Keeps one child process running: readiness line, exponential backoff (1 s doubling to 30 s), gives up after 6 failed starts, 45 s readiness timeout, failures reset after 60 s up; a replaced process exits before its successor starts (at most 10 s wait); a failure's reason is the child's last output line |
 | `ExecutableLocator`, `BrainCatalog` | Find `node`, `codex`, `claude`, `hermes` the way a login shell would; install and sign-in commands per brain; Hermes API server detection |
 | `BrainCompanion` | Locates the bundled companion folder |
 
@@ -57,19 +57,28 @@ import BrainKit
 when it closes, so it never outlives the app, even after a crash. It is ready when it prints
 `Brain companion ready at` (`BrainService.readinessMarker`).
 
+- **Changes.** The first `configure` applies at once; later ones apply after 0.4 s without
+  another change (`debounce`), so a host can pass every settings edit straight through.
+  `stop()` (or `configure(nil)`) applies at once and drops a pending change.
 - **Runtime switches.** A configuration that differs only in `runtime` keeps the running
   process; switch with `AgentSessionClient.setRuntime(_:)` (the companion keeps each
-  runtime's conversation). Any other change restarts the process. `restart()` restarts now
-  and clears the failure count; `stop()` (or `configure(nil)`) ends it.
-- **State directory.** Private (0700): the 256-bit `token` file (0600), `session.json` with the
+  runtime's conversation). Any other change restarts the process once the old one has
+  exited, so the port is free. `restart()` restarts now and clears the failure count.
+- **Endpoint.** `endpoint()` and `makeClient()` return nil until the process reports ready.
+  The token must be a private (0600), regular, user-owned file of 64 hex digits, as the
+  companion itself requires; a symlink is refused.
+- **State directory.** Private (0700, applied to an existing directory too): the 256-bit `token` file (0600), `session.json` with the
   conversation ids, recent request ids and the folder permissions. The companion refuses a
   state directory that belongs to another workspace; `stateDirectory(forWorkspace:under:)`
   derives one per workspace from a hash of its canonical path.
 - **Port.** The host chooses a loopback port (1024-65535). Two apps running a brain at the same
   time need different ports.
-- **Why it cannot run.** Missing workspace, a relative state directory, a bad port, a missing
-  companion or no Node.js 22+ leave `service.state` at `.unavailable(reason)` with a sentence
-  to show; `nodeStatus` says which Node.js is used.
+- **Why it cannot run.** Missing workspace, a relative state directory, a bad port, an
+  assistant name that is not one line of at most 64 characters (UTF-16 units, the companion's
+  rule), a missing companion or no Node.js 22+ leave `service.state` at `.unavailable(reason)`
+  with a sentence to show; `nodeStatus` says which Node.js is used. `node --version` runs on
+  the main actor, at most 2 s, once per path; `refreshDetections()` checks again after an
+  install or upgrade.
 - **Brains.** `detections` lists which of `codex`, `claude` and `hermes` are installed (and
   whether Hermes' API server is enabled in `~/.hermes/.env`). The companion reports what the
   running runtime can honour in `capabilities`; show or hide approvals, folder scope, model
