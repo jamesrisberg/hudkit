@@ -131,6 +131,40 @@ struct ModelStoreTests {
         try await settle(store)
         #expect(!store.isReady)
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(ModelStore.markerName).path))
+        // The bad file is removed, so the next launch does not hash the folder again.
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("model").path))
+        let again = ModelStore(manifest: spec, directory: directory, downloader: Self.noNetwork)
+        #expect(!again.isVerifying)
+    }
+
+    @Test func cancelStopsABackgroundVerification() async throws {
+        let big = Data(repeating: 1, count: 48 * 1024 * 1024)
+        let directory = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory.deletingLastPathComponent()) }
+        try write(["big": big], to: directory)
+        let spec = manifest(files: ["big": big], base: URL(string: "https://invalid.invalid/")!)
+        let store = ModelStore(manifest: spec, directory: directory, downloader: Self.noNetwork)
+        #expect(store.isVerifying)
+        store.cancel()
+        #expect(!store.isVerifying)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(!store.isReady)
+        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent(ModelStore.markerName).path))
+    }
+
+    @Test func installSweepsLeftoverPartialFiles() async throws {
+        let files = ["nested/a.onnx": Data("model a".utf8)]
+        let source = try temporaryDirectory("source")
+        try write(files, to: source)
+        let target = source.deletingLastPathComponent().appendingPathComponent("target")
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        try write([".stale.partial": Data("x".utf8), "nested/.old.partial": Data("y".utf8)], to: target)
+        try await ModelStore.install(
+            manifest(files: files, base: source), into: target,
+            downloader: { try await ModelDownload.fetch($0, expectedSize: $1, progress: $2) }, progress: { _, _ in })
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent(".stale.partial").path))
+        #expect(!FileManager.default.fileExists(atPath: target.appendingPathComponent("nested/.old.partial").path))
+        #expect(FileManager.default.fileExists(atPath: target.appendingPathComponent("nested/a.onnx").path))
     }
 
     @Test func cancelSuppressesLateCompletionAndCleansUp() async throws {

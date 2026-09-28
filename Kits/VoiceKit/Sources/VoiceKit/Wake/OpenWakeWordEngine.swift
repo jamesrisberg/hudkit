@@ -83,10 +83,13 @@ public actor OpenWakeWordEngine: WakeScoringEngine {
     }
 
     public func score(_ frame: [Float]) async throws -> Float {
-        guard frame.count == Self.frameSamples else { throw WakeDetectorError.invalidAudio }
+        guard frame.count == Self.frameSamples, frame.allSatisfy(\.isFinite) else {
+            throw WakeDetectorError.invalidAudio
+        }
         if mels.isEmpty { try await reset() }
-        // Same scaling as openWakeWord's PCM16 input: to PCM16 by truncation, then back to float.
-        raw.append(contentsOf: frame.map { Float(Int16(clamping: Int($0 * 32767))) })
+        // Same scaling as openWakeWord's PCM16 input: clipped, to PCM16 by truncation, then back
+        // to float.
+        raw.append(contentsOf: frame.map { Float(Int16(max(-1, min(1, $0)) * 32767)) })
         if raw.count > Self.frameSamples + Self.melContext {
             raw.removeFirst(raw.count - (Self.frameSamples + Self.melContext))
         }

@@ -7,9 +7,10 @@ import Foundation
 /// is cut at its last space so speech never waits on a runaway sentence.
 public struct SentenceSplitter: Sendable {
     public static let defaultMaximumLength = 280
-    /// Words whose period does not end a sentence.
+    /// Words whose period does not end a sentence. Initialisms ("U.S.", "e.g.") are
+    /// recognised by shape instead.
     static let abbreviations: Set<String> = [
-        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "e.g", "i.e", "approx", "no",
+        "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc", "approx",
     ]
 
     public let maximumLength: Int
@@ -50,7 +51,7 @@ public struct SentenceSplitter: Sendable {
                     end = buffer.index(after: end)
                 }
                 guard end < buffer.endIndex else { break }  // wait for the next character
-                if buffer[end].isWhitespace, !(character == "." && endsWithAbbreviation(before: index)) {
+                if buffer[end].isWhitespace, !(character == "." && periodContinues(at: index)) {
                     return end
                 }
                 index = end
@@ -66,11 +67,18 @@ public struct SentenceSplitter: Sendable {
         return limit
     }
 
-    private func endsWithAbbreviation(before period: String.Index) -> Bool {
+    /// True when the period at `period` belongs to its word rather than ending the sentence:
+    /// an abbreviation, an initialism (single letters between periods: "U.S", "e.g"), or a
+    /// list number at the start of a sentence ("1. Buy milk").
+    private func periodContinues(at period: String.Index) -> Bool {
         let head = buffer[..<period]
         let start = head.lastIndex(where: \.isWhitespace).map { head.index(after: $0) } ?? head.startIndex
         let word = head[start...].lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "(\"'“‘"))
-        return Self.abbreviations.contains(word)
+        if Self.abbreviations.contains(word) { return true }
+        let parts = word.split(separator: ".", omittingEmptySubsequences: false)
+        if parts.count > 1, parts.allSatisfy({ $0.count == 1 && $0.first!.isLetter }) { return true }
+        let sentenceStart = head[..<start].allSatisfy(\.isWhitespace)
+        return sentenceStart && !word.isEmpty && word.allSatisfy(\.isNumber)
     }
 }
 
@@ -80,7 +88,8 @@ public struct SentenceSplitter: Sendable {
 public final class SpeechStreamer {
     public private(set) var voice: SpeechVoice
     /// Runs once: after `finish()` when every sentence has been spoken, or on the first
-    /// failure (the rest is dropped). Never after `stop()`.
+    /// failure (the rest is dropped). Never after `stop()`. Once it has run the stream is
+    /// ended: `append` and `finish` are ignored until `stop()`.
     public var onFinished: ((Result<Void, Error>) -> Void)?
     /// True while a sentence is speaking or queued.
     public private(set) var isSpeaking = false
@@ -88,6 +97,7 @@ public final class SpeechStreamer {
     private var splitter: SentenceSplitter
     private var queue: [String] = []
     private var finishing = false
+    private var ended = false
     private var generation = UUID()
 
     public init(voice: SpeechVoice, maximumSentenceLength: Int = SentenceSplitter.defaultMaximumLength) {
@@ -97,14 +107,14 @@ public final class SpeechStreamer {
 
     /// Adds the next piece of text.
     public func append(_ text: String) {
-        guard !finishing else { return }
+        guard !finishing, !ended else { return }
         queue += splitter.append(text)
         speakNext()
     }
 
     /// Marks the text complete: the unfinished tail is spoken too.
     public func finish() {
-        guard !finishing else { return }
+        guard !finishing, !ended else { return }
         finishing = true
         if let rest = splitter.flush() { queue.append(rest) }
         speakNext()
@@ -112,11 +122,17 @@ public final class SpeechStreamer {
 
     /// Stops speaking and drops everything queued; the streamer can be used again.
     public func stop() {
+        let wasSpeaking = isSpeaking
+        reset()
+        ended = false
+        if wasSpeaking { voice.stop() }
+    }
+
+    private func reset() {
         generation = UUID()
         queue.removeAll()
         splitter = SentenceSplitter(maximumLength: splitter.maximumLength)
         finishing = false
-        if isSpeaking { voice.stop() }
         isSpeaking = false
     }
 
@@ -140,8 +156,8 @@ public final class SpeechStreamer {
     }
 
     private func complete(_ result: Result<Void, Error>) {
-        let callback = onFinished
-        stop()
-        callback?(result)
+        reset()
+        ended = true
+        onFinished?(result)
     }
 }

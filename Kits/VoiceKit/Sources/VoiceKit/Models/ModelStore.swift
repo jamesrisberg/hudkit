@@ -6,7 +6,8 @@ import Foundation
 /// is installed. Readiness is a marker written after full verification plus a size check of
 /// every file, so launch never re-hashes hundreds of megabytes. A folder with every file at
 /// its pinned size but no marker (an install made by another app) is hashed once in the
-/// background and then marked.
+/// background and then marked; a file that fails that check is deleted, so it is not hashed
+/// again at the next launch and the next download replaces it.
 @MainActor
 public final class ModelStore: ObservableObject {
     public typealias Downloader =
@@ -35,7 +36,11 @@ public final class ModelStore: ObservableObject {
 
     private let downloader: Downloader
     private var operation: Task<Void, Never>?
+    /// The detached hashing of an unmarked folder; cancelled with the operation.
+    private var verification: Task<UnmarkedCheck, Never>?
     private var generation = UUID()
+
+    enum UnmarkedCheck: Sendable { case verified, failed, cancelled }
 
     public init(
         manifest: ModelManifest, directory: URL,
@@ -68,11 +73,23 @@ public final class ModelStore: ObservableObject {
 
     public func refresh() {
         guard !isDownloading else { return }
+        settleReadiness()
+        guard !isReady, !isVerifying, Self.hasPinnedSizes(manifest, in: directory) else { return }
+        verifyUnmarked()
+    }
+
+    private func settleReadiness() {
         isReady = Self.isInstalled(manifest, in: directory)
         progress = isReady ? 1 : 0
         status = isReady ? "Ready" : "Not downloaded (\(manifest.sizeDescription))"
-        guard !isReady, !isVerifying, Self.hasPinnedSizes(manifest, in: directory) else { return }
-        verifyUnmarked()
+    }
+
+    private func stopOperation() {
+        operation?.cancel()
+        operation = nil
+        verification?.cancel()
+        verification = nil
+        isVerifying = false
     }
 
     /// Hashes a complete but unmarked folder off the main actor; never downloads.
@@ -83,28 +100,26 @@ public final class ModelStore: ObservableObject {
         status = "Checking model files…"
         let manifest = manifest
         let directory = directory
+        let verification = Task.detached(priority: .utility) { () -> UnmarkedCheck in
+            Self.checkUnmarked(manifest, in: directory)
+        }
+        self.verification = verification
         operation = Task { [weak self] in
-            let verified = await Task.detached(priority: .utility) { () -> Bool in
-                guard manifest.artifacts.allSatisfy({
-                    Self.verified(directory.appendingPathComponent($0.path), artifact: $0)
-                }) else { return false }
-                return (try? Self.writeMarker(manifest, in: directory)) != nil
-            }.value
+            _ = await verification.value
             guard let self, self.generation == token else { return }
-            // Settled here rather than through refresh(), which would hash a bad folder again.
+            // Settled without refresh(): a failed check removed the bad files, and a cancelled
+            // one waits for the next refresh().
+            self.verification = nil
             self.isVerifying = false
-            self.isReady = verified
-            self.progress = verified ? 1 : 0
-            self.status = verified ? "Ready" : "Not downloaded (\(manifest.sizeDescription))"
+            self.settleReadiness()
         }
     }
 
     public func download() {
         guard !isDownloading else { return }
-        operation?.cancel()
+        stopOperation()
         let token = UUID()
         generation = token
-        isVerifying = false
         isDownloading = true
         isReady = false
         error = ""
@@ -136,14 +151,32 @@ public final class ModelStore: ObservableObject {
         }
     }
 
+    /// Stops a download or a background check; neither restarts until `download()` or
+    /// `refresh()`.
     public func cancel() {
         generation = UUID()
-        operation?.cancel()
-        operation = nil
+        stopOperation()
         isDownloading = false
-        isVerifying = false
-        refresh()
+        settleReadiness()
         if !isReady { status = "Download cancelled" }
+    }
+
+    /// Hashes every file of a complete, unmarked folder and writes the marker when all match.
+    /// Files that do not match are deleted. Cancellation leaves the folder as it was.
+    nonisolated static func checkUnmarked(_ manifest: ModelManifest, in directory: URL) -> UnmarkedCheck {
+        var bad: [URL] = []
+        for artifact in manifest.artifacts {
+            let url = directory.appendingPathComponent(artifact.path)
+            let ok = verified(url, artifact: artifact)
+            if Task.isCancelled { return .cancelled }
+            if !ok { bad.append(url) }
+        }
+        guard bad.isEmpty else {
+            for url in bad { try? FileManager.default.removeItem(at: url) }
+            return .failed
+        }
+        guard !Task.isCancelled, (try? writeMarker(manifest, in: directory)) != nil else { return .cancelled }
+        return .verified
     }
 
     /// Installs every artifact: keeps verified files already present, clones matching files
@@ -155,6 +188,7 @@ public final class ModelStore: ObservableObject {
         let fileManager = FileManager.default
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         try? fileManager.removeItem(at: directory.appendingPathComponent(markerName))
+        removePartials(in: directory)
         let total = Double(max(1, manifest.totalBytes))
         var finished: Int64 = 0
         for artifact in manifest.artifacts {
@@ -199,6 +233,16 @@ public final class ModelStore: ObservableObject {
         try writeMarker(manifest, in: directory)
     }
 
+    /// Staged files an interrupted install left behind (`.<uuid>.partial`, at any depth).
+    nonisolated static func removePartials(in directory: URL) {
+        guard let files = FileManager.default.enumerator(at: directory, includingPropertiesForKeys: nil)
+        else { return }
+        for case let url as URL in files
+        where url.lastPathComponent.hasPrefix(".") && url.pathExtension == "partial" {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
     nonisolated static func writeMarker(_ manifest: ModelManifest, in directory: URL) throws {
         try Data((manifest.fingerprint + "\n").utf8)
             .write(to: directory.appendingPathComponent(markerName), options: .atomic)
@@ -214,6 +258,7 @@ public final class ModelStore: ObservableObject {
         var hash = SHA256()
         do {
             while let data = try handle.read(upToCount: 1024 * 1024), !data.isEmpty {
+                if Task.isCancelled { return false }
                 hash.update(data: data)
             }
             return hash.finalize().map { String(format: "%02x", $0) }.joined() == artifact.sha256

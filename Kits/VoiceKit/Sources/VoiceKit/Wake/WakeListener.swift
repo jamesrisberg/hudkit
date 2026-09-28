@@ -4,7 +4,8 @@ import Foundation
 /// only consumes what the source delivers.
 @MainActor
 public protocol WakeAudioSource: AnyObject {
-    /// 16 kHz mono chunks in -1...1, each at most one second long, delivered on the main actor.
+    /// 16 kHz mono chunks, nominally in -1...1, each at most one second long, delivered on the
+    /// main actor.
     var onSamples: (([Float]) -> Void)? { get set }
     func start() async throws
     func stop()
@@ -12,9 +13,17 @@ public protocol WakeAudioSource: AnyObject {
 
 /// Feeds an audio source into a wake detector, one chunk at a time, and reports each wake.
 /// After a wake the listener stays quiet (the source keeps running) until `rearm()`, so the
-/// host can take the utterance that follows.
+/// host can take the utterance that follows. On `.failed` the source is stopped; the host
+/// calls `start()` again to resume.
 @MainActor
 public final class WakeListener {
+    public enum Failure: LocalizedError {
+        case fellBehind
+        public var errorDescription: String? {
+            "Wake detection fell behind the microphone."
+        }
+    }
+
     public enum State: Equatable, Sendable {
         case idle, arming, listening, woke, failed(String)
     }
@@ -26,17 +35,20 @@ public final class WakeListener {
     public var onWake: ((WakeDetection) -> Void)?
     public var onStateChanged: ((State) -> Void)?
 
-    /// Chunks queued beyond this (about three seconds of audio when chunks are 80 ms) mean
-    /// the detector has fallen behind; the backlog is dropped and the detector re-armed,
-    /// since a gap in the audio corrupts the model's temporal context anyway.
-    public static let maximumBacklog = 40
+    /// Audio waiting for the detector beyond this (half a second) means it cannot keep up;
+    /// listening fails rather than scoring stale audio with a gap the model cannot see.
+    public static let maximumBacklogSamples = 8_000
 
     private let detector: WakeDetector
     private let source: WakeAudioSource
     private var threshold: Double
     private var backlog: [[Float]] = []
+    private var backlogSamples = 0
     private var draining = false
     private var generation = UUID()
+    /// `source.start()` calls not yet returned; a superseded start stops the source only
+    /// when none is left, so it never turns off the microphone a newer start opened.
+    private var sourceStartsInFlight = 0
 
     public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5) {
         self.detector = detector
@@ -54,8 +66,19 @@ public final class WakeListener {
         do {
             info = try await detector.arm(threshold: threshold)
             guard generation == token else { return }
-            try await source.start()
-            guard generation == token else { return }
+            sourceStartsInFlight += 1
+            defer { sourceStartsInFlight -= 1 }
+            do {
+                try await source.start()
+            } catch {
+                guard generation == token else { return }
+                throw error
+            }
+            guard generation == token else {
+                // Stopped (or restarted) while the source was starting.
+                if sourceStartsInFlight == 1, state != .listening, state != .woke { source.stop() }
+                return
+            }
             state = .listening
         } catch {
             guard generation == token else { return }
@@ -64,13 +87,13 @@ public final class WakeListener {
     }
 
     /// Listens for the next wake after one was reported, optionally at a new threshold.
+    /// Ignored while arming, so overlapping calls arm once.
     public func rearm(threshold: Double? = nil) async {
         guard state == .woke || state == .listening else { return }
         if let threshold { self.threshold = threshold }
         let token = UUID()
         generation = token
-        backlog.removeAll()
-        draining = false
+        clearBacklog()
         state = .arming
         source.onSamples = { [weak self] samples in self?.receive(samples, token: token) }
         do {
@@ -87,8 +110,7 @@ public final class WakeListener {
         generation = UUID()
         source.onSamples = nil
         source.stop()
-        backlog.removeAll()
-        draining = false
+        clearBacklog()
         state = .idle
         await detector.disarm()
     }
@@ -98,20 +120,26 @@ public final class WakeListener {
         return false
     }
 
+    private func clearBacklog() {
+        backlog.removeAll()
+        backlogSamples = 0
+        draining = false
+    }
+
     private func fail(_ error: Error) {
         generation = UUID()
         source.onSamples = nil
         source.stop()
-        backlog.removeAll()
-        draining = false
+        clearBacklog()
         state = .failed(error.localizedDescription)
     }
 
     private func receive(_ samples: [Float], token: UUID) {
         guard generation == token, state == .listening else { return }
         backlog.append(samples)
-        if backlog.count > Self.maximumBacklog {
-            Task { await self.rearm() }
+        backlogSamples += samples.count
+        if backlogSamples > Self.maximumBacklogSamples {
+            fail(Failure.fellBehind)
             return
         }
         guard !draining else { return }
@@ -123,11 +151,11 @@ public final class WakeListener {
     private func drain(token: UUID) async {
         while generation == token, state == .listening, !backlog.isEmpty {
             let chunk = backlog.removeFirst()
+            backlogSamples -= chunk.count
             do {
                 if let detection = try await detector.detect(chunk) {
                     guard generation == token else { return }
-                    backlog.removeAll()
-                    draining = false
+                    clearBacklog()
                     state = .woke
                     onWake?(detection)
                     return

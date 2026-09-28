@@ -153,6 +153,7 @@ struct GrokVoiceTests {
         for scenario in ["ok", "error", "empty", "length", "stream"] {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.protocolClasses = [GrokFixtureProtocol.self]
+            configuration.timeoutIntervalForRequest = 99
             var request = try GrokVoice.request(text: "Hello", apiKey: "key", voice: "eve")
             request.setValue(scenario, forHTTPHeaderField: "X-Test-Scenario")
             do {
@@ -167,6 +168,8 @@ struct GrokVoiceTests {
                 }
                 #expect(!error.localizedDescription.contains("private reply"))
             }
+            // The caller's configuration is left as it was.
+            #expect(configuration.timeoutIntervalForRequest == 99)
         }
     }
 }
