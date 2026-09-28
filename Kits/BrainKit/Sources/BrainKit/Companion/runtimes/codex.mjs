@@ -35,7 +35,7 @@ export class CodexRuntime extends Runtime {
     await this.rpc.request('initialize', { clientInfo: { name: 'brainkit', title: 'BrainKit', version: '0.1.0' }, capabilities: { experimentalApi: false } });
     this.rpc.send({ method: 'initialized', params: {} });
     const policy = this.threadPolicy();
-    const result = await this.rpc.request(saved.threadId ? 'thread/resume' : 'thread/start', saved.threadId ? { ...policy, threadId: saved.threadId } : policy);
+    const result = saved.threadId ? await this.resumeOrStart(saved.threadId, policy) : await this.rpc.request('thread/start', policy);
     this.threadId = result.thread.id;
     const last = result.thread.turns?.at(-1);
     let lastTurn = null;
@@ -48,6 +48,16 @@ export class CodexRuntime extends Runtime {
     try { this.models = await discoverModels(this.rpc); }
     catch (error) { if (this.rpc.dead) throw error; this.models = {}; }
     return { threadId: this.threadId, lastTurn };
+  }
+  // Codex writes a thread to disk only once it has a turn, so a thread started but never used
+  // cannot be resumed after a restart ("no rollout found"); start a new one in its place.
+  // Every other resume failure stays fatal.
+  async resumeOrStart(threadId, policy) {
+    try { return await this.rpc.request('thread/resume', { ...policy, threadId }); }
+    catch (error) {
+      if (this.rpc.dead || !/no rollout found/i.test(String(error?.message ?? error))) throw error;
+      return this.rpc.request('thread/start', policy);
+    }
   }
   async submit(text, { permissions, beforeSend = async () => {} }) {
     this.permissions = permissions;

@@ -319,3 +319,30 @@ test('restart preserves deep follow-up affinity without fabricating old route me
   assert.equal(runtime.calls.at(-1).params.model,'gpt-5.6-luna');
   assert.equal(writes.at(-1).lastRouteTier,'fast');
 });
+
+test('a saved thread Codex never wrote to disk is replaced with a new one', async () => {
+  const runtime = new FakeRuntime();
+  const original = runtime.request.bind(runtime);
+  runtime.request = async (method, params) => {
+    if (method === 'thread/resume') { runtime.calls.push({ method, params }); throw new Error('no rollout found for thread id empty-thread'); }
+    return original(method, params);
+  };
+  const writes = [];
+  const session = new Session({ runtime: new CodexRuntime({ transport: runtime }), cwd: '/workspace', saved: { threadId: 'empty-thread' }, save: async value => writes.push(value) });
+  await session.initialize();
+  assert.deepEqual(runtime.calls.filter(c => c.method?.startsWith('thread/')).map(c => c.method), ['thread/resume', 'thread/start']);
+  assert.equal(session.snapshot().threadId, 'thread-1');
+  assert.notEqual(session.snapshot().status, 'failed');
+});
+
+test('other thread resume failures still fail the runtime', async () => {
+  const runtime = new FakeRuntime();
+  const original = runtime.request.bind(runtime);
+  runtime.request = async (method, params) => {
+    if (method === 'thread/resume') throw new Error('permission denied');
+    return original(method, params);
+  };
+  const session = new Session({ runtime: new CodexRuntime({ transport: runtime }), cwd: '/workspace', saved: { threadId: 'thread-9' }, save: async () => {} });
+  await session.initialize().catch(() => {});
+  assert.equal(runtime.calls.filter(c => c.method === 'thread/start').length, 0);
+});
