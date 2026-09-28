@@ -26,6 +26,7 @@ public final class GrokVoice: SpeechVoice {
 
     /// xAI's built-in voices.
     public nonisolated static let voices = ["ara", "rex", "sal", "eve", "leo"]
+    public nonisolated static let defaultVoice = "ara"
     public nonisolated static let maximumAudioBytes = 8 * 1024 * 1024
     nonisolated static let endpoint = URL(string: "https://api.x.ai/v1/tts")!
 
@@ -78,10 +79,13 @@ public final class GrokVoice: SpeechVoice {
         return request
     }
 
-    /// One size-capped request: no cache, no cookies, no redirects.
+    /// One size-capped request: no cache, no cookies, no redirects. `configuration` is copied,
+    /// not changed.
     public nonisolated static func download(
-        _ request: URLRequest, configuration: URLSessionConfiguration = .ephemeral
+        _ request: URLRequest, configuration base: URLSessionConfiguration = .ephemeral
     ) async throws -> Data {
+        // swiftlint:disable:next force_cast
+        let configuration = base.copy() as! URLSessionConfiguration
         configuration.urlCache = nil
         configuration.httpCookieStorage = nil
         configuration.timeoutIntervalForRequest = 30
@@ -93,11 +97,18 @@ public final class GrokVoice: SpeechVoice {
         guard (200..<300).contains(http.statusCode) else { throw Failure.service(http.statusCode) }
         guard response.expectedContentLength <= maximumAudioBytes else { throw Failure.oversizedAudio }
         var audio = Data()
+        var chunk: [UInt8] = []
+        chunk.reserveCapacity(64 * 1024)
         for try await byte in bytes {
-            try Task.checkCancellation()
-            guard audio.count < maximumAudioBytes else { throw Failure.oversizedAudio }
-            audio.append(byte)
+            guard audio.count + chunk.count < maximumAudioBytes else { throw Failure.oversizedAudio }
+            chunk.append(byte)
+            if chunk.count == chunk.capacity {
+                try Task.checkCancellation()
+                audio.append(contentsOf: chunk)
+                chunk.removeAll(keepingCapacity: true)
+            }
         }
+        audio.append(contentsOf: chunk)
         guard !audio.isEmpty else { throw Failure.invalidResponse }
         return audio
     }

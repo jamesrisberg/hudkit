@@ -52,6 +52,15 @@ struct SentenceSplitterTests {
         #expect(list.append("Bring snacks, e.g. chips. Done ") == ["Bring snacks, e.g. chips."])
     }
 
+    @Test func listNumbersAndInitialismsDoNotEndASentence() {
+        var list = SentenceSplitter()
+        #expect(list.append("1. Buy milk. 2. Eggs. ") == ["1. Buy milk.", "2. Eggs."])
+        var initialism = SentenceSplitter()
+        #expect(initialism.append("The U.S. is big. Yes ") == ["The U.S. is big."])
+        var answer = SentenceSplitter()
+        #expect(answer.append("The answer is no. Next ") == ["The answer is no."])
+    }
+
     @Test func cutsARunawaySentenceAtASpace() {
         var splitter = SentenceSplitter(maximumLength: 20)
         let sentences = splitter.append("one two three four five six seven eight")
@@ -115,6 +124,29 @@ struct SpeechStreamerTests {
         #expect(results == [false])
         #expect(voice.spoken == ["One."])
         #expect(!streamer.isSpeaking)
+        // Ended: more text is ignored and the end is reported once, until stop().
+        streamer.append("Three. Four. ")
+        streamer.finish()
+        #expect(voice.spoken == ["One."])
+        #expect(results == [false])
+        streamer.stop()
+        streamer.append("Five. ")
+        #expect(voice.spoken == ["One.", "Five."])
+    }
+
+    @Test func aFinishedStreamIgnoresMoreTextUntilStopped() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice)
+        var finished = 0
+        streamer.onFinished = { _ in finished += 1 }
+        streamer.append("Done.")
+        streamer.finish()
+        voice.finishCurrent()
+        #expect(finished == 1)
+        streamer.append("Late. ")
+        streamer.finish()
+        #expect(voice.spoken == ["Done."])
+        #expect(finished == 1)
     }
 
     @Test func finishingEmptyTextCompletesAtOnce() {

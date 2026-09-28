@@ -9,12 +9,13 @@ public final class SystemVoice: NSObject, SpeechVoice, AVSpeechSynthesizerDelega
     public var onSpeakingChanged: ((Bool) -> Void)?
     /// The synthesizer reports no level; this is never called.
     public var onLevel: ((Double) -> Void)?
-    private let synthesizer = AVSpeechSynthesizer()
+    private let synthesizer: AVSpeechSynthesizer
     private var current: AVSpeechUtterance?
     private var completion: ((Result<Void, Error>) -> Void)?
 
-    public init(options: VoiceSettings.System = .init()) {
+    public init(options: VoiceSettings.System = .init(), synthesizer: AVSpeechSynthesizer = AVSpeechSynthesizer()) {
         self.options = options
+        self.synthesizer = synthesizer
         super.init()
         synthesizer.delegate = self
     }
@@ -53,23 +54,31 @@ public final class SystemVoice: NSObject, SpeechVoice, AVSpeechSynthesizerDelega
     public nonisolated func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance
     ) {
-        let identifier = ObjectIdentifier(utterance)
-        Task { @MainActor [weak self] in self?.finished(identifier) }
+        let box = UtteranceBox(utterance)
+        Task { @MainActor [weak self] in self?.finished(box.utterance) }
     }
 
     public nonisolated func speechSynthesizer(
         _ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance
     ) {
-        let identifier = ObjectIdentifier(utterance)
-        Task { @MainActor [weak self] in self?.finished(identifier) }
+        let box = UtteranceBox(utterance)
+        Task { @MainActor [weak self] in self?.finished(box.utterance) }
     }
 
-    private func finished(_ identifier: ObjectIdentifier) {
-        guard let current, ObjectIdentifier(current) == identifier else { return }
+    /// Completes only the utterance still current, compared by reference (the box keeps a
+    /// finished utterance alive, so its address cannot be reused by a newer one).
+    func finished(_ utterance: AVSpeechUtterance) {
+        guard let current, current === utterance else { return }
         self.current = nil
         let callback = completion
         completion = nil
         onSpeakingChanged?(false)
         callback?(.success(()))
     }
+}
+
+/// Carries an utterance to the main actor for an identity check only.
+private struct UtteranceBox: @unchecked Sendable {
+    let utterance: AVSpeechUtterance
+    init(_ utterance: AVSpeechUtterance) { self.utterance = utterance }
 }

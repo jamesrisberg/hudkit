@@ -9,7 +9,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ### Added
 
-**VoiceKit** (a new product; apps that import only HUDKit do not build it)
+**VoiceKit** (a separate package in `Kits/VoiceKit`; apps that depend only on HUDKit do not
+fetch or build it)
 - Wake word detection on the Mac with openWakeWord models, fed by the app's own microphone
   audio (`WakeListener`, `InProcessWakeDetector`, `OpenWakeWordEngine`). Wake models download
   only when asked; "Hey Jarvis" is for personal, non-commercial use and is never bundled.

@@ -64,17 +64,17 @@ public struct VoiceSettings: Codable, Equatable, Sendable {
         /// One of `GrokVoice.voices`.
         public var voice: String
 
-        public init(voice: String = "ara") { self.voice = voice }
+        public init(voice: String = GrokVoice.defaultVoice) { self.voice = voice }
 
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
-            self.init(voice: (try? c.decodeIfPresent(String.self, forKey: .voice)) ?? "ara")
+            self.init(voice: (try? c.decodeIfPresent(String.self, forKey: .voice)) ?? GrokVoice.defaultVoice)
             self = sanitized()
         }
 
         public func sanitized() -> Grok {
             let voice = voice.lowercased()
-            return Grok(voice: GrokVoice.voices.contains(voice) ? voice : "ara")
+            return Grok(voice: GrokVoice.voices.contains(voice) ? voice : GrokVoice.defaultVoice)
         }
     }
 

@@ -26,7 +26,8 @@ public struct WakeDetection: Equatable, Sendable {
 @MainActor
 public protocol WakeDetector: AnyObject {
     func arm(threshold: Double) async throws -> WakeDetectorInfo
-    /// Accepts chunks of up to one second of samples in -1...1.
+    /// Accepts chunks of up to one second of samples, nominally in -1...1; louder samples are
+    /// clipped, non-finite ones are an error.
     func detect(_ samples: [Float]) async throws -> WakeDetection?
     /// Drops buffered audio and in-flight results; the next `detect` needs a new `arm`.
     func disarm() async
@@ -90,7 +91,7 @@ public final class InProcessWakeDetector: WakeDetector {
             invalidate()
             throw WakeDetectorError.notArmed
         }
-        guard samples.count <= 16_000, samples.allSatisfy({ $0.isFinite && (-1...1).contains($0) }) else {
+        guard samples.count <= 16_000, samples.allSatisfy(\.isFinite) else {
             invalidate()
             throw WakeDetectorError.invalidAudio
         }

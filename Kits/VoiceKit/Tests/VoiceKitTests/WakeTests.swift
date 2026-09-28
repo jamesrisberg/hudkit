@@ -73,7 +73,9 @@ struct InProcessWakeDetectorTests {
         let detector = InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x")
         await #expect(throws: WakeDetectorError.self) { _ = try await detector.arm(threshold: 0.99) }
         _ = try await detector.arm(threshold: 0.5)
-        await #expect(throws: WakeDetectorError.self) { _ = try await detector.detect([2]) }
+        // A loud sample outside -1...1 is clipped by the engine, not an error.
+        #expect(try await detector.detect([2, -3]) == nil)
+        await #expect(throws: WakeDetectorError.self) { _ = try await detector.detect([.nan]) }
         // Any error disarms.
         await #expect(throws: WakeDetectorError.self) { _ = try await detector.detect([0]) }
         _ = try await detector.arm(threshold: 0.5)
@@ -199,8 +201,95 @@ struct RealWakeModelTests {
         #expect(scores.firstIndex { $0 >= 0.5 }.map { (20...24).contains($0) } == true, "scores: \(scores)")
         #expect(scores.prefix(18).allSatisfy { $0 < 0.05 }, "scores: \(scores)")
 
+        // A non-finite sample is an error, not a crash.
+        await #expect(throws: WakeDetectorError.self) {
+            _ = try await engine.score([Float](repeating: .nan, count: 1280))
+        }
+
         // Silence after a reset never wakes.
         try await engine.reset()
         for _ in 0..<40 { #expect(try await engine.score([Float](repeating: 0, count: 1280)) < 0.05) }
+    }
+}
+
+/// A source whose start waits until the test releases it, like a microphone asking for access.
+@MainActor
+final class SuspendingAudioSource: WakeAudioSource {
+    var onSamples: (([Float]) -> Void)?
+    var running = false
+    var pending: CheckedContinuation<Void, Never>?
+
+    func start() async throws {
+        await withCheckedContinuation { pending = $0 }
+        running = true
+    }
+
+    func stop() { running = false }
+
+    func release() {
+        pending?.resume()
+        pending = nil
+    }
+}
+
+/// Never finishes a detection, so audio backs up behind it.
+@MainActor
+final class StuckDetector: WakeDetector {
+    var detects = 0
+    func arm(threshold: Double) async throws -> WakeDetectorInfo { WakeDetectorInfo(phrase: "x", model: "x") }
+    func detect(_ samples: [Float]) async throws -> WakeDetection? {
+        detects += 1
+        try await Task.sleep(for: .seconds(3600))
+        return nil
+    }
+    func disarm() async {}
+}
+
+@MainActor
+struct WakeListenerLifecycleTests {
+    @Test func stopDuringASlowSourceStartLeavesTheMicrophoneOff() async throws {
+        let source = SuspendingAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"), source: source)
+        let starting = Task { await listener.start() }
+        try await eventually { source.pending != nil }
+        await listener.stop()
+        source.release()
+        await starting.value
+        #expect(!source.running)
+        #expect(listener.state == .idle)
+    }
+
+    @Test func aStaleStartDoesNotStopTheSourceOfANewerOne() async throws {
+        let source = SuspendingAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"), source: source)
+        let first = Task { await listener.start() }
+        try await eventually { source.pending != nil }
+        await listener.stop()
+        let firstStart = source.pending
+        source.pending = nil
+        let second = Task { await listener.start() }
+        try await eventually { source.pending != nil }
+        source.release()
+        await second.value
+        #expect(listener.state == .listening)
+        firstStart?.resume()
+        await first.value
+        #expect(source.running)
+        #expect(listener.state == .listening)
+        await listener.stop()
+    }
+
+    @Test func audioBackingUpBeyondTheCapFailsListening() async throws {
+        let source = FakeAudioSource()
+        let detector = StuckDetector()
+        let listener = WakeListener(detector: detector, source: source)
+        await listener.start()
+        source.push(1280)
+        try await eventually { detector.detects == 1 }
+        for _ in 0..<7 { source.push(1280) }  // 8960 samples waiting
+        #expect(listener.state == .failed(WakeListener.Failure.fellBehind.localizedDescription))
+        #expect(!source.running)
     }
 }
