@@ -18,6 +18,9 @@ jobs:
       - name: BrainKit companion
         working-directory: Kits/BrainKit/Sources/BrainKit/Companion
         run: node --test test/*.test.mjs
+      - name: VoiceKit
+        working-directory: Kits/VoiceKit
+        run: swift test
       # The shared scripts and the app template: generate an app next to this checkout,
       # then test and build it the way an app repo does.
       - name: Template app
