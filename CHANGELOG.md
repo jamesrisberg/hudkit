@@ -29,8 +29,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `docs/CONTRACT.md` § Agent sessions).
 
 **BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
-- A local agent brain for any app: Codex, Claude Code or Hermes behind a Node.js companion
-  (Node 22 or later, no npm packages) that ships inside BrainKit with its tests.
+- A local agent brain for any app: Codex, Claude Code, Hermes or mclaude (a mechaclaude session)
+  behind a Node.js companion (Node 22 or later, no npm packages) that ships inside BrainKit with
+  its tests.
 - `BrainService` finds Node.js, launches and supervises the companion from a plain
   `BrainServiceConfiguration` (runtime, workspace, state directory, port, tool paths, assistant
   name), restarts it with backoff, stops it with the app, and hands out `AgentSessionClient`s.
@@ -40,6 +41,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `BrainCatalog`.
 - The companion's `--assistant-name` names the assistant in its voice instructions; without it
   the instructions name none. Its environment variables use the `BRAINKIT_` prefix.
+- BrainKit: the brain can run as an mclaude (mechaclaude) session that also appears in MechaHUD;
+  snapshots name the session (`sessionKey`).
 
 **Build**
 - `hud-build.sh` builds the executable products named in `HUD_HELPERS` and ships each in
@@ -71,10 +74,9 @@ fetch or build it)
   another app already downloaded, and a one-time check of a complete folder installed elsewhere.
 
 ### Fixed
-- `hud-build.sh` now copies every SwiftPM resource bundle (`.build/<configuration>/*.bundle`)
-  into `Contents/Resources` before signing. Previously an app using BrainKit's companion or
-  VoiceKit's Kokoro voice built and signed successfully but crashed at first use, missing the
-  bundle it needed.
+- `hud-build.sh` copies every SwiftPM resource bundle (`.build/<configuration>/*.bundle`) into
+  `Contents/Resources` before signing, so an app using BrainKit's companion or VoiceKit's Kokoro
+  voice has the bundle it needs at first use.
 
 ## [0.1.0] - 2026-09-27
 
