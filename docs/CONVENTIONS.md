@@ -255,8 +255,9 @@ What it does:
    `origin/integration/machud`. The release notes say which. `--ref <commit>` releases
    another commit than `HEAD` (with `VERSION` and the notes read from it), e.g.
    `--ref origin/main` while unpublished local commits are ahead; the commit must be on origin.
-2. `hud-build.sh` with the "Developer ID Application" identity: hardened runtime,
-   `--timestamp`, `<Product>.entitlements` when present, the helper CLI signed first.
+2. The repo's `build.sh` (so its settings, such as MacHUD's `HUD_HELPERS`, apply; each named
+   helper must be in the bundle), which runs `hud-build.sh`, with the "Developer ID
+   Application" identity: hardened runtime, `--timestamp`, `<Product>.entitlements` when present, the helper CLI signed first.
 3. `ditto -c -k --keepParent` (without extended attributes: AppleDouble `._` files in a zip
    break the signature when something other than ditto unpacks it), `xcrun notarytool submit
    --wait`. A rejected submission prints the notarization log's issues and stops: nothing is
