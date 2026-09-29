@@ -249,8 +249,10 @@ What it does:
 
 1. Builds a clean copy of `HEAD` in a temporary directory (a detached worktree; uncommitted
    work in the checkout is not released), with each `../<dep>` path package exported next to
-   it: HUDKit at its newest `v*` tag (`HUDKIT_REF` overrides), other siblings (Stash's Sift) at
-   their `origin/main` (`HUD_DEP_REF`). The release notes say which. `--ref <commit>` releases
+   it: HUDKit (and a `../hudkit/Kits/<Kit>` package) at HUDKit's newest `v*` tag (`HUDKIT_REF`
+   overrides), other siblings at the remote branch their checkout tracks, else `origin/main`
+   (`HUD_DEP_REF` overrides): Stash's Sift at `origin/main`, MacHUD's SpeakFree at
+   `origin/integration/machud`. The release notes say which. `--ref <commit>` releases
    another commit than `HEAD` (with `VERSION` and the notes read from it), e.g.
    `--ref origin/main` while unpublished local commits are ahead; the commit must be on origin.
 2. `hud-build.sh` with the "Developer ID Application" identity: hardened runtime,
