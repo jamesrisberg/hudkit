@@ -38,6 +38,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 - `BrainService` finds Node.js, launches and supervises the companion from a plain
   `BrainServiceConfiguration` (runtime, workspace, state directory, port, tool paths, assistant
   name), restarts it with backoff, stops it with the app, and hands out `AgentSessionClient`s.
+  A change of runtime alone keeps the companion running and switches it once no turn is running,
+  so a host only reconfigures.
 - `BrainSettings`, the Codable brain choice and per-runtime options a settings tab binds to.
 - `AgentSessionClient` (turns, approvals, cancel, reset, runtime switch, folder permissions),
   `TranscriptModel` for rendering a conversation, `ManagedService`, `ExecutableLocator` and
@@ -45,6 +47,7 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 - The companion's `--assistant-name` names the assistant in its voice instructions; without it
   the instructions name none. Its environment variables use the `BRAINKIT_` prefix.
   snapshots name the session (`sessionKey`).
+- BrainKit: a host can give its brain tools (`toolServers`, stdio MCP servers) and a description
 
 **Build**
 - `hud-build.sh` builds the executable products named in `HUD_HELPERS` and ships each in

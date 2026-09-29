@@ -83,3 +83,41 @@ func temporaryDirectory(_ label: String) throws -> URL {
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url.resolvingSymlinksInPath()
 }
+
+/// A running companion as `BrainService` sees it when it follows the configured runtime:
+/// `status` and `runtime` answer the snapshot read; `switchError` fails the next switch.
+@MainActor
+final class FakeRuntimeControl: CompanionRuntimeControl {
+    var runtime = "codex"
+    var status = "idle"
+    var reads = 0
+    var switches: [AgentRuntime] = []
+    var switchError: Error?
+    var endpoints: [ServiceEndpoint] = []
+
+    func refreshSnapshot() async throws -> AgentSessionSnapshot {
+        reads += 1
+        return snapshot()
+    }
+
+    func setRuntime(_ runtime: AgentRuntime) async throws -> AgentSessionSnapshot {
+        switches.append(runtime)
+        if let error = switchError {
+            switchError = nil
+            throw error
+        }
+        self.runtime = runtime.rawValue
+        return snapshot()
+    }
+
+    private func snapshot() -> AgentSessionSnapshot {
+        let json = #"{"status":"\#(status)","output":"","progress":"","approvals":[],"revision":1,"instanceId":"fake","runtime":"\#(runtime)"}"#
+        return try! JSONDecoder().decode(AgentSessionSnapshot.self, from: Data(json.utf8))
+    }
+}
+
+/// Lets tasks started on the main actor run to their next suspension.
+@MainActor
+func drainTasks() async {
+    for _ in 0..<50 { await Task.yield() }
+}
