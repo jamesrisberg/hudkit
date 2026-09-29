@@ -11,6 +11,7 @@ final class BrainServiceTests: XCTestCase {
     private var versionCalls: [String] = []
     private var nodeOutput = "v22.3.0\n"
     private var files: Set<String> = ["/opt/homebrew/bin/node", "/opt/homebrew/bin/codex", "/Users/test/.local/bin/claude"]
+    private var control: FakeRuntimeControl!
 
     override func setUpWithError() throws {
         root = try temporaryDirectory("service")
@@ -22,6 +23,7 @@ final class BrainServiceTests: XCTestCase {
         launcher = FakeLauncher()
         scheduler = FakeScheduler()
         versionCalls = []
+        control = FakeRuntimeControl()
     }
 
     override func tearDownWithError() throws {
@@ -30,7 +32,7 @@ final class BrainServiceTests: XCTestCase {
 
     private func make(companionDirectory: URL? = nil) -> BrainService {
         let directory = companionDirectory ?? companion
-        return BrainService(
+        let service = BrainService(
             launcher: launcher, scheduler: scheduler,
             locator: { [unowned self] in
                 ExecutableLocator(path: "/usr/bin:/bin", home: "/Users/test",
@@ -42,6 +44,11 @@ final class BrainServiceTests: XCTestCase {
             },
             companionDirectory: { directory },
             environment: ["PATH": "/usr/bin", "LANG": "en_US.UTF-8"])
+        service.makeRuntimeControl = { [unowned self] endpoint in
+            control.endpoints.append(endpoint)
+            return control
+        }
+        return service
     }
 
     private func configuration(_ runtime: AgentRuntime = .codex) -> BrainServiceConfiguration {
@@ -110,9 +117,10 @@ final class BrainServiceTests: XCTestCase {
                        ["--mclaude", "/custom/mclaude", "--runtime", "mclaude"])
     }
 
-    func testRuntimeOnlyChangeKeepsTheProcessAndOtherChangesRestart() {
+    func testRuntimeOnlyChangeKeepsTheProcessAndOtherChangesRestart() throws {
         let service = make()
         service.configure(configuration(.codex))
+        try writeToken(String(repeating: "f", count: 64), to: root.appendingPathComponent("state/token"))
         launcher.last.say("Brain companion ready at")
         service.configure(configuration(.claude))
         scheduler.advance(0.4)
@@ -127,6 +135,135 @@ final class BrainServiceTests: XCTestCase {
         XCTAssertTrue(launcher.launched[0].terminated)
         launcher.launched[0].exit(0)
         XCTAssertEqual(launcher.launched.count, 2)
+    }
+
+    // MARK: Runtime switches
+
+    /// A service whose companion (runtime `running`) is up with a token, so it can be reached.
+    private func runningCompanion(_ runtime: AgentRuntime = .codex) async throws -> BrainService {
+        let service = make()
+        service.configure(configuration(runtime))
+        try writeToken(String(repeating: "f", count: 64), to: root.appendingPathComponent("state/token"))
+        control.runtime = runtime.rawValue
+        launcher.last.say("Brain companion ready at")
+        await drainTasks()
+        return service
+    }
+
+    func testARuntimeOnlyChangeReachesTheRunningCompanion() async throws {
+        let service = try await runningCompanion(.codex)
+        // Ready: the companion already runs the configured runtime, so nothing is switched.
+        XCTAssertEqual(control.reads, 1)
+        XCTAssertEqual(control.switches, [])
+        XCTAssertEqual(control.endpoints.last, ServiceEndpoint(url: URL(string: "http://127.0.0.1:8791")!,
+                                                               token: String(repeating: "f", count: 64)))
+        service.configure(configuration(.mclaude))
+        await drainTasks()
+        XCTAssertEqual(control.switches, [], "not before the debounce")
+        scheduler.advance(0.4)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.mclaude])
+        XCTAssertEqual(launcher.launched.count, 1)
+        XCTAssertFalse(launcher.last.terminated)
+        // Nothing more is asked once it runs the configured runtime.
+        scheduler.advance(10)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.mclaude])
+    }
+
+    func testTheSwitchWaitsForTheTurnToEnd() async throws {
+        let service = try await runningCompanion(.codex)
+        control.status = "running"
+        service.configure(configuration(.claude))
+        scheduler.advance(0.4)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [])
+        control.status = "approval"
+        scheduler.advance(BrainService.runtimeRetryInterval)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [])
+        control.status = "idle"
+        scheduler.advance(BrainService.runtimeRetryInterval)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.claude])
+    }
+
+    func testARefusedSwitchIsAskedAgainAndAFailedStartIsNot() async throws {
+        let service = try await runningCompanion(.codex)
+        // A turn began between the read and the switch.
+        control.switchError = AgentSessionError.server(409, "Finish or interrupt the active turn before switching runtime")
+        service.configure(configuration(.claude))
+        scheduler.advance(0.4)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.claude])
+        scheduler.advance(BrainService.runtimeRetryInterval)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.claude, .claude])
+        XCTAssertEqual(control.runtime, "claude")
+
+        // The runtime does not start: the companion reports that itself; the switch is not repeated.
+        control.switchError = AgentSessionError.server(503, "Claude Code is not installed")
+        control.runtime = "claude"
+        service.configure(configuration(.hermes))
+        scheduler.advance(0.4)
+        await drainTasks()
+        scheduler.advance(10)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.claude, .claude, .hermes])
+    }
+
+    func testAChangeDuringStartIsAppliedOnceReady() async throws {
+        let service = make()
+        service.configure(configuration(.codex))
+        try writeToken(String(repeating: "f", count: 64), to: root.appendingPathComponent("state/token"))
+        // Still starting with --runtime codex when the change lands.
+        service.configure(configuration(.claude))
+        scheduler.advance(0.4)
+        await drainTasks()
+        XCTAssertEqual(launcher.launched.count, 1)
+        XCTAssertEqual(control.reads, 0)
+        launcher.last.say("Brain companion ready at")
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.claude])
+    }
+
+    func testARestartOrStopDropsAPendingSwitch() async throws {
+        let service = try await runningCompanion(.codex)
+        control.status = "running"
+        service.configure(configuration(.claude))
+        scheduler.advance(0.4)
+        await drainTasks()
+        // Another change restarts the companion, which starts on the new runtime itself.
+        var moved = configuration(.claude)
+        moved.port = 8792
+        service.configure(moved)
+        scheduler.advance(0.4)
+        control.status = "idle"
+        scheduler.advance(10)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [])
+        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(2)), ["--runtime", "claude"])
+
+        let stopped = try await runningCompanion(.codex)
+        control.status = "running"
+        stopped.configure(configuration(.claude))
+        scheduler.advance(0.4)
+        await drainTasks()
+        stopped.stop()
+        control.status = "idle"
+        scheduler.advance(10)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [])
+    }
+
+    func testACompanionSwitchedElsewhereIsBroughtBackToTheConfiguredRuntime() async throws {
+        let service = try await runningCompanion(.claude)
+        // Another client of the companion switched it; the next configuration puts it back.
+        control.runtime = "codex"
+        service.configure(configuration(.claude))
+        scheduler.advance(0.4)
+        await drainTasks()
+        XCTAssertEqual(control.switches, [.claude])
     }
 
     func testToolServersAndHostContextArePrivateFilesAndFlags() throws {

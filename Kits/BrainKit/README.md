@@ -63,8 +63,11 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
   another change (`debounce`), so a host can pass every settings edit straight through.
   `stop()` (or `configure(nil)`) applies at once and drops a pending change.
 - **Runtime switches.** A configuration that differs only in `runtime` keeps the running
-  process; switch with `AgentSessionClient.setRuntime(_:)` (the companion keeps each
-  runtime's conversation). Any other change restarts the process once the old one has
+  process, and `BrainService` switches it (`POST /v1/runtime`) once no turn is running,
+  checking again every second while one is; the companion keeps each runtime's conversation.
+  Each time the companion becomes ready the service also checks that it runs the configured
+  runtime, so a change made while it was starting is not lost. The host only reconfigures.
+  Any other change restarts the process once the old one has
   exited, so the port is free, including a change to the tool servers or host context.
   `restart()` restarts now and clears the failure count.
 - **Tool servers and host context.** `toolServers` are stdio MCP servers (`name`, `command`,

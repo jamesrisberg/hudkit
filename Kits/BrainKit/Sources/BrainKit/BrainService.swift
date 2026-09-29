@@ -5,7 +5,8 @@ import Foundation
 /// How to run the brain companion. A plain value: the host fills it from its own settings
 /// (`BrainSettings.serviceConfiguration`) and chooses where state lives and which port to use.
 public struct BrainServiceConfiguration: Equatable, Sendable {
-    /// The runtime the companion starts with; later switches go over HTTP (`AgentSessionClient.setRuntime`).
+    /// The runtime the companion runs. A change keeps the running process and switches it
+    /// between turns (see `BrainService`).
     public var runtime: AgentRuntime
     /// The agent's workspace (`--cwd`), an existing folder.
     public var workingDirectory: String
@@ -83,10 +84,11 @@ public struct ServiceEndpoint: Equatable, Sendable {
 /// exits with the host. The first configuration applies at once; later ones apply after
 /// `debounce` (0.4 s) without another change, so a settings field being typed into does not
 /// restart the companion per keystroke. A configuration that differs only in `runtime` keeps
-/// the running process (the host switches with `AgentSessionClient.setRuntime`; the new flag
-/// applies at the next start); any other change restarts it, after the old process exits.
-/// That includes the tool servers and host context: they are written to private files in the
-/// state directory and the companion reads them once at start.
+/// the running process, and the service switches it (`POST /v1/runtime`) once it is between
+/// turns; the new flag applies at the next start. The companion keeps each runtime's
+/// conversation, so switching back resumes it. Any other change restarts it, after the old
+/// process exits. That includes the tool servers and host context: they are written to
+/// private files in the state directory and the companion reads them once at start.
 @MainActor
 public final class BrainService: ObservableObject {
     /// The line the companion prints once it listens.
@@ -115,6 +117,16 @@ public final class BrainService: ObservableObject {
     private var nodeVersions: [String: Int?] = [:]
     private var lastKey: [String]?
     private var cancellables = Set<AnyCancellable>()
+    /// Bumped whenever the runtime to follow or the process changes; a stale attempt stops.
+    private var runtimeFollow = 0
+    private var runtimeRetry: ScheduledAction?
+    /// How long a switch waits before asking again: a turn is running, or the companion
+    /// refused because one began.
+    nonisolated static let runtimeRetryInterval: TimeInterval = 1
+    /// What the service talks to the running companion's runtime through (tests use a fake).
+    var makeRuntimeControl: (ServiceEndpoint) -> CompanionRuntimeControl = {
+        AgentSessionClient(endpoint: $0.url, token: $0.token)
+    }
 
     /// Every dependency is injectable for tests: the launcher and scheduler behind the
     /// supervisor, tool lookup, `node --version`, the companion folder and the environment
@@ -140,6 +152,11 @@ public final class BrainService: ObservableObject {
         baseEnvironment = environment
         service.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+        // `$state` publishes before the change lands, so the new value is passed on.
+        service.$state.sink { [weak self] state in
+            MainActor.assumeIsolated { self?.serviceStateChanged(state) }
+        }
+        .store(in: &cancellables)
     }
 
     /// Run the companion as configured, or stop it (`nil`, applied at once).
@@ -172,7 +189,13 @@ public final class BrainService: ObservableObject {
     /// The token file must be a private (0600), regular, user-owned file, as the companion
     /// itself requires.
     public func endpoint() -> ServiceEndpoint? {
-        guard service.state == .running, let applied,
+        guard service.state == .running else { return nil }
+        return companionEndpoint()
+    }
+
+    /// The applied configuration's address and token, whatever the process state.
+    private func companionEndpoint() -> ServiceEndpoint? {
+        guard let applied,
               let token = Self.readToken(URL(fileURLWithPath: applied.stateDirectory).appendingPathComponent("token")),
               let url = URL(string: "http://127.0.0.1:\(applied.port)")
         else { return nil }
@@ -196,6 +219,7 @@ public final class BrainService: ObservableObject {
         case .success(let built):
             if built.key == lastKey, service.spec != nil {
                 service.replaceSpecWithoutRestart(built.spec)
+                if service.state == .running { followRuntime() }
             } else {
                 // Forced: a changed host file leaves the command line as it was.
                 service.configure(.success(built.spec), force: true)
@@ -204,6 +228,60 @@ public final class BrainService: ObservableObject {
         case .failure(let reason):
             service.configure(.failure(reason))
             lastKey = nil
+        }
+    }
+
+    // MARK: Runtime
+
+    private func serviceStateChanged(_ state: ManagedService.State) {
+        // Each start runs the spec's `--runtime`, but the configuration may have changed while it
+        // started; a stopped process has nothing to switch.
+        if state == .running { followRuntime() } else { stopFollowingRuntime() }
+    }
+
+    /// Brings the running companion to the applied configuration's runtime: reads its snapshot
+    /// and, when it runs another runtime, switches between turns, asking again every
+    /// `runtimeRetryInterval` while a turn runs.
+    private func followRuntime() {
+        stopFollowingRuntime()
+        guard let wanted = applied?.runtime, let endpoint = companionEndpoint() else { return }
+        attemptRuntime(wanted, control: makeRuntimeControl(endpoint), follow: runtimeFollow)
+    }
+
+    private func stopFollowingRuntime() {
+        runtimeFollow += 1
+        runtimeRetry?.cancel()
+        runtimeRetry = nil
+    }
+
+    private func attemptRuntime(_ wanted: AgentRuntime, control: CompanionRuntimeControl, follow: Int) {
+        Task { [weak self] in
+            let settled = await Self.bringRuntime(control, to: wanted)
+            guard let self, follow == runtimeFollow, !settled else { return }
+            runtimeRetry = scheduler.schedule(after: Self.runtimeRetryInterval) { [weak self] in
+                guard let self, follow == runtimeFollow else { return }
+                attemptRuntime(wanted, control: control, follow: follow)
+            }
+        }
+    }
+
+    /// One attempt; true when there is nothing more to do: the companion runs `wanted`, or it
+    /// failed to start it (the snapshot says why; asking again would only restart it again).
+    static func bringRuntime(_ control: CompanionRuntimeControl, to wanted: AgentRuntime) async -> Bool {
+        do {
+            let snapshot = try await control.refreshSnapshot()
+            // A snapshot without a runtime comes from a companion running Codex.
+            if (snapshot.runtime ?? AgentRuntime.codex.rawValue) == wanted.rawValue { return true }
+            // The companion refuses a switch during a turn and never cuts one off.
+            if snapshot.isWorking { return false }
+            _ = try await control.setRuntime(wanted)
+            return true
+        } catch AgentSessionError.server(let status, _) {
+            // 409: a turn began in the meantime.
+            return status != 409
+        } catch {
+            // Unreachable for now; a process that goes away stops the follow.
+            return false
         }
     }
 
@@ -411,3 +489,13 @@ public final class BrainService: ObservableObject {
         return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
     }
 }
+
+/// What `BrainService` needs of a running companion to switch its runtime; `AgentSessionClient`
+/// provides it.
+@MainActor
+protocol CompanionRuntimeControl: AnyObject {
+    func refreshSnapshot() async throws -> AgentSessionSnapshot
+    func setRuntime(_ runtime: AgentRuntime) async throws -> AgentSessionSnapshot
+}
+
+extension AgentSessionClient: CompanionRuntimeControl {}

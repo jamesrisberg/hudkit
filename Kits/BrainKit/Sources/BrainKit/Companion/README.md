@@ -384,7 +384,8 @@ This test passed against local Codex 0.153.2 on September 7, 2026.
 
 Protocol reference: [official Codex App Server documentation](https://developers.openai.com/codex/app-server).
 Implementation was checked against schemas generated locally with
-`codex app-server generate-ts --out /tmp/codex-schema` from Codex 0.153.2.
+`codex app-server generate-ts --out /tmp/codex-schema` from Codex 0.153.2, and its tool-server
+configuration (`config/read`, `mcpServerStatus/list`) against Codex 0.155.1.
 No MechaClaude source is embedded or patched into a third-party executable.
 
 `npm run acceptance:permissions` runs five real model turns in fresh temporary

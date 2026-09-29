@@ -76,4 +76,45 @@ final class BrainCompanionLiveTests: XCTestCase {
         }
         XCTAssertFalse(alive, "the companion outlived stop()")
     }
+
+    func testARuntimeChangeReachesTheRunningCompanionWithoutTheHost() async throws {
+        guard let node = ExecutableLocator.live.locate("node"),
+              let major = BrainService.runVersion(node).flatMap(ExecutableLocator.nodeMajorVersion),
+              major >= BrainService.minimumNodeMajorVersion
+        else { throw XCTSkip("Node.js \(BrainService.minimumNodeMajorVersion) or later is not installed") }
+        let companion = try XCTUnwrap(BrainCompanion.directory)
+        let root = try temporaryDirectory("live-switch")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+
+        let brain = BrainService()
+        var configuration = BrainServiceConfiguration(
+            runtime: .codex, workingDirectory: workspace.path, stateDirectory: root.appendingPathComponent("state").path,
+            port: Int.random(in: 30000...45000), nodePath: node)
+        // Stand-ins only; no installed agent CLI is ever handed to the companion.
+        configuration.codexPath = companion.appendingPathComponent("test/fixtures/fake-codex.mjs").path
+        configuration.claudePath = companion.appendingPathComponent("test/fixtures/fake-claude.mjs").path
+        configuration.mclaudePath = "/usr/bin/false"
+        brain.configure(configuration)
+        defer { brain.stop() }
+        for _ in 0..<150 where brain.service.state != .running {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(brain.service.state, .running, brain.service.log.joined(separator: "\n"))
+        let pid = try XCTUnwrap(brain.service.processIdentifier)
+        let client = try XCTUnwrap(brain.makeClient())
+        let started = try await client.refreshSnapshot()
+        XCTAssertEqual(started.runtime, "codex")
+
+        configuration.runtime = .claude
+        brain.configure(configuration)
+        var runtime: String?
+        for _ in 0..<100 where runtime != "claude" {
+            try await Task.sleep(for: .milliseconds(100))
+            runtime = try? await client.refreshSnapshot().runtime
+        }
+        XCTAssertEqual(runtime, "claude", brain.service.log.joined(separator: "\n"))
+        XCTAssertEqual(brain.service.processIdentifier, pid, "a runtime change keeps the process")
+    }
 }
