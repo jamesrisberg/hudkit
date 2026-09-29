@@ -23,12 +23,15 @@ public struct AgentPermissions: Codable, Equatable, Sendable {
 /// Agent runtimes the companion can run. Raw values match the companion's `--runtime`.
 public enum AgentRuntime: String, Codable, CaseIterable, Identifiable, Sendable {
     case codex, hermes, claude
+    /// Claude Code through mechaclaude: one detached session that MechaHUD shows and drives too.
+    case mclaude
     public var id: String { rawValue }
     public var displayName: String {
         switch self {
         case .codex: return "Codex"
         case .hermes: return "Hermes"
         case .claude: return "Claude"
+        case .mclaude: return "mclaude"
         }
     }
 }
@@ -95,6 +98,9 @@ public struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     /// The runtime id; a snapshot without one comes from a companion running Codex.
     public var runtime: String?
     public var capabilities: AgentCapabilities?
+    /// The external session the runtime drives, as mechaclaude keys it (`claude:<sessionId>`);
+    /// nil for runtimes without one.
+    public var sessionKey: String?
 
     public var runtimeName: String {
         AgentRuntime(rawValue: runtime ?? AgentRuntime.codex.rawValue)?.displayName ?? (runtime ?? "Agent")

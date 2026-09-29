@@ -10,13 +10,14 @@ manual mode. Audio stays in the host app's local speech pipeline; this service
 accepts only text. The runtime sends that text and relevant tool context to its
 configured model provider and keeps its own conversation history on disk.
 
-Three runtimes are built in:
+Four runtimes are built in:
 
 | `--runtime` | Agent | Transport | Folder scope | Approvals | Cancel |
 |---|---|---|---|---|---|
 | `codex` (default) | Codex CLI | `codex app-server`, stdio JSON-RPC | enforced by Codex's sandbox | per command/patch | yes |
 | `hermes` | Hermes Agent | `hermes gateway` API server, HTTP + SSE | advisory (Hermes' own config) | if the gateway advertises them | if advertised |
 | `claude` | Claude Code CLI | `claude -p` stream-json, one process per turn | working dirs + permission mode | per tool call, MCP bridge | SIGINT |
+| `mclaude` | Claude Code through mechaclaude | one detached `mclaude` session, its hub socket | working dirs + permission mode | per tool call, the session's own prompts | Esc (`interrupt`) |
 
 The companion needs only Node.js 22 or later: no npm install, built-in modules only.
 
@@ -38,7 +39,8 @@ Flags:
   by the app) is read from the state directory; the first default is `codex`.
 - `--state-dir /absolute/path` — private state (default `~/.brainkit-companion`).
 - `--port 8789` — HTTP port on 127.0.0.1 (default 8788).
-- `--codex /path/to/codex`, `--claude /path/to/claude` — executables if not on PATH
+- `--codex /path/to/codex`, `--claude /path/to/claude`, `--mclaude /path/to/mclaude` —
+  executables if not on PATH
   (Homebrew Codex: `--codex /opt/homebrew/bin/codex`).
 - `--runtime-url http://127.0.0.1:8642` — Hermes API server. Plain HTTP only on
   loopback; https elsewhere. Persisted in the state directory.
@@ -156,6 +158,45 @@ approvals need a working directory, so Claude and Hermes approvals are answered 
 screen (Allow Once / Deny). References: [headless mode](https://code.claude.com/docs/en/headless),
 [CLI reference](https://code.claude.com/docs/en/cli-reference).
 
+### mclaude (mechaclaude)
+
+[mechaclaude](https://github.com/flux627/mechaclaude) instruments an interactive Claude Code
+session so other programs can watch and drive it; MechaHUD's dashboard shows the same
+session. The runtime starts one session through mechaclaude's own detached launch and then
+only talks to the session's hub socket (mechaclaude's `PROTOCOL.md`):
+
+```
+mclaude --mc-detach --mc-name brainkit-<hex> --mc-cwd <workspace> --mc-tag brainkit-<hex>
+        --append-system-prompt <voice instructions>
+        --permission-mode acceptEdits|bypassPermissions [--resume <session id>] [--add-dir <approved folder>...]
+```
+
+mechaclaude hosts the session in tmux; when it cannot (tmux missing), its reason becomes the
+runtime's failure ("mclaude sessions need tmux: brew install tmux"). The session's sidecar
+(`~/.claude/state-taps/cc-<pid>.meta.json`, or `$MCLAUDE_STATE_DIR`) is found by its spawn tag
+and names the socket and the session id; snapshots carry `sessionKey: "claude:<session id>"`.
+The first start accepts Claude Code's folder-trust prompt for the chosen workspace.
+
+On the socket (newline-delimited JSON): a turn is `{"type":"control","action":"submit","text":…,"cid":…}`,
+confirmed by the hub's `ack` with `status: "applied"`. Busy comes from `affordances.busy`, the
+`turn` view's `loading` and `session_state`; live text from `stream_event` text deltas of the
+main conversation (`querySource` `repl_main_thread`, never title or subagent streams); the
+committed answer and the turn's end from transcript `message` records (`stop_reason:
+"end_turn"`, `turn_duration`); interruption from `turn_pulse` `aborted`; errors from `error`
+frames. Permission prompts are `dialog` frames of a `permission_*` kind with a select
+`overlay`: Allow picks the overlay's `yes` option and Deny its `no` option (`choose {index}`;
+never "don't ask again"), or `answer {id, result}` when several prompts are open. Cancel sends
+`interrupt` (Esc). New conversation submits `/clear` and follows the session's new id.
+Approved folders and full access are launch options, so changing them relaunches the session
+with `--resume` on the same conversation.
+
+The session outlives the companion: a restart finds it by its tag and reattaches, and a
+session that has ended is replaced by a new one. Turns typed in MechaHUD or the session's
+terminal appear in snapshots as turns without a `requestId` (a submit from the app is refused
+with 409 while one runs), and an approval answered there disappears. A question Claude asks
+(AskUserQuestion) is answered in MechaHUD. Ending a session is mechaclaude's force-exit:
+SIGTERM to the session's own process, after which its tmux session closes.
+
 ## Runtime interface
 
 `runtimes/Runtime.mjs` is the contract; read its header comment for the exact
@@ -171,16 +212,18 @@ persistence, opaque approval IDs, timing, the snapshot — and talks to one runt
 | `setPermissions(permissions)` | apply the validated scope from the next turn at the latest |
 | `cancel(turnId)` | request interruption; confirmation arrives as an event |
 | `reset({ permissions })` → `{ threadId }` | new conversation (idle only) |
-| `snapshot()` → `{ routing }` | runtime-specific snapshot fields |
+| `snapshot()` → `{ routing, sessionKey }` | runtime-specific snapshot fields; `sessionKey` names an external session, or null |
 | `persistentState()` | extra JSON saved in the state directory, returned as `saved` |
 | `capabilities` | `{ approvals, folderScope, modelRouting, cancel }` |
 | `close()` | release processes and connections |
 
 Events: `started {turnId}`, `output {turnId, text}` (the full visible text so far),
 `progress {turnId, text}`, `approval {id, turnId, kind, reason, command, cwd}`,
-`completed|failed|cancelled {turnId, output, error}`, `notice {error}`, and
-`disconnected Error`. A runtime refuses requests it cannot represent (fail closed)
-and declines its own pending approvals when a turn ends.
+`approvalResolved {id}` (answered in another client), `completed|failed|cancelled
+{turnId, output, error}`, `notice {error}`, and `disconnected Error`. `started` while
+idle is a turn another client of the same session began; it carries no request ID. A
+runtime refuses requests it cannot represent (fail closed) and declines its own pending
+approvals when a turn ends.
 
 ### Adding a runtime
 
@@ -227,7 +270,7 @@ polls complete snapshots so missed polls do not lose approvals.
 - `POST /v1/cancel` with `{}` — request interruption; subsequent snapshots confirm it.
   Returns 409 if the runtime cannot interrupt.
 - `POST /v1/session/reset` with `{}` — start a new conversation while idle.
-- `POST /v1/runtime` with `{ "runtime": "codex" | "hermes" | "claude" }` — switch
+- `POST /v1/runtime` with `{ "runtime": "codex" | "hermes" | "claude" | "mclaude" }` — switch
   runtime while idle (409 otherwise), or restart the current one after a failure.
   Only the name crosses HTTP; executables, URLs and tokens come from the command
   line. Permissions and recent request IDs carry over; each runtime's conversation
@@ -237,8 +280,9 @@ polls complete snapshots so missed polls do not lose approvals.
 Snapshots contain `threadId`, `turnId`, `status`, `output`, `progress`, `approvals`,
 `error`, increasing `revision`, a process-specific `instanceId`, optional
 `requestId`, `route`, `timing`, `permissions` (mode and approved folders),
-`routing`, then `runtime` (the runtime ID) and `capabilities`
-(`approvals`, `folderScope`, `modelRouting`, `cancel`). The fields before `runtime`
+`routing`, then `runtime` (the runtime ID), `capabilities`
+(`approvals`, `folderScope`, `modelRouting`, `cancel`) and `sessionKey` (the external
+session the runtime drives, mechaclaude's `claude:<session id>`, or null). The fields before `runtime`
 keep a fixed order and encoding, and new fields are only appended after them
 (`test/snapshot-compat.test.mjs`).
 Status is `idle`, `running`, `approval`, `interrupted`, or `failed`. `idle` with a
@@ -268,7 +312,11 @@ receipts, permission policy), the Hermes adapter against a fake gateway speaking
 Runs API and SSE (deltas, progress, approval round trip, stop, degraded
 capabilities, dropped stream, restart), the Claude adapter against a fake `claude`
 that launches the real MCP permission bridge (streaming, resume, approvals, SIGINT
-cancel, crash, permission modes, socket authentication), runtime switching, HTTP
+cancel, crash, permission modes, socket authentication), the mclaude adapter against a
+fake `mclaude` wrapper and session hub socket (launch arguments, main-conversation text,
+approvals through the select overlay, a turn and an approval driven from a second client,
+interrupt, API error, reattach after restart, relaunch on a permission change, `/clear`,
+the folder-trust prompt, tmux and missing-install failures), runtime switching, HTTP
 auth/Host/Origin checks, body limits, file permissions, and snapshot byte
 compatibility. The smoke test initializes the installed Codex protocol and reads
 signed-in status; it does not start a model turn.
@@ -314,6 +362,11 @@ provider-backed gateway are covered only by the fake gateway so far. The Claude
 adapter was checked against Claude Code 2.1.283: streamed output, an approval
 allowed and one denied through the MCP bridge, `--resume` continuity, and SIGINT
 cancellation followed by a resumed turn.
+The mclaude wire was checked on September 28, 2026 against mclaude built from Claude
+Code 2.1.284: a detached launch, one turn submitted over the socket and its answer read from
+the stream and transcript frames, and SIGTERM ending the session and its tmux session. The
+runtime itself then launched, reattached by its tag and ended a real session without sending
+a turn; approvals, interrupt, `/clear` and relaunch are covered only by the fake so far.
 
 ### Voice model routing (Codex)
 

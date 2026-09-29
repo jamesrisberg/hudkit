@@ -31,6 +31,19 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         }
     }
 
+    public struct MclaudeOptions: Codable, Equatable, Sendable {
+        /// Path to mechaclaude's `mclaude` wrapper; empty finds it on PATH and the common install
+        /// folders. mechaclaude runs the session detached and needs tmux for it.
+        public var executablePath: String
+
+        public init(executablePath: String = "") { self.executablePath = executablePath }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            executablePath = try values.decodeIfPresent(String.self, forKey: .executablePath) ?? ""
+        }
+    }
+
     public struct HermesOptions: Codable, Equatable, Sendable {
         /// The `hermes gateway` API server; empty uses the port in `~/.hermes/.env`.
         public var url: String
@@ -54,10 +67,12 @@ public struct BrainSettings: Codable, Equatable, Sendable {
     public var codex: CodexOptions
     public var claude: ClaudeOptions
     public var hermes: HermesOptions
+    public var mclaude: MclaudeOptions
 
     public init(runtime: AgentRuntime = .codex, workspacePath: String = "", assistantName: String = "",
                 nodePath: String = "", codex: CodexOptions = CodexOptions(),
-                claude: ClaudeOptions = ClaudeOptions(), hermes: HermesOptions = HermesOptions()) {
+                claude: ClaudeOptions = ClaudeOptions(), hermes: HermesOptions = HermesOptions(),
+                mclaude: MclaudeOptions = MclaudeOptions()) {
         self.runtime = runtime
         self.workspacePath = workspacePath
         self.assistantName = assistantName
@@ -65,10 +80,11 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         self.codex = codex
         self.claude = claude
         self.hermes = hermes
+        self.mclaude = mclaude
     }
 
     private enum CodingKeys: String, CodingKey {
-        case runtime, workspacePath, assistantName, nodePath, codex, claude, hermes
+        case runtime, workspacePath, assistantName, nodePath, codex, claude, hermes, mclaude
     }
 
     public init(from decoder: Decoder) throws {
@@ -81,6 +97,7 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         codex = try values.decodeIfPresent(CodexOptions.self, forKey: .codex) ?? CodexOptions()
         claude = try values.decodeIfPresent(ClaudeOptions.self, forKey: .claude) ?? ClaudeOptions()
         hermes = try values.decodeIfPresent(HermesOptions.self, forKey: .hermes) ?? HermesOptions()
+        mclaude = try values.decodeIfPresent(MclaudeOptions.self, forKey: .mclaude) ?? MclaudeOptions()
     }
 
     /// The launch configuration for these settings. The host chooses where the companion
@@ -89,6 +106,6 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         BrainServiceConfiguration(
             runtime: runtime, workingDirectory: workspacePath, stateDirectory: stateDirectory, port: port,
             nodePath: nodePath, codexPath: codex.executablePath, claudePath: claude.executablePath,
-            hermesURL: hermes.url, assistantName: assistantName)
+            mclaudePath: mclaude.executablePath, hermesURL: hermes.url, assistantName: assistantName)
     }
 }

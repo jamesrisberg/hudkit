@@ -16,9 +16,10 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
     public var port: Int
     /// `node` override; empty finds Node.js on PATH and the common install folders.
     public var nodePath: String
-    /// `codex` and `claude` overrides; empty finds them the same way.
+    /// `codex`, `claude` and `mclaude` overrides; empty finds them the same way.
     public var codexPath: String
     public var claudePath: String
+    public var mclaudePath: String
     /// Hermes API server (`--runtime-url`); empty lets the companion read `~/.hermes/.env`.
     public var hermesURL: String
     /// Name the voice instructions give the assistant (`--assistant-name`); empty names none.
@@ -26,7 +27,7 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
 
     public init(runtime: AgentRuntime, workingDirectory: String, stateDirectory: String, port: Int,
                 nodePath: String = "", codexPath: String = "", claudePath: String = "",
-                hermesURL: String = "", assistantName: String = "") {
+                mclaudePath: String = "", hermesURL: String = "", assistantName: String = "") {
         self.runtime = runtime
         self.workingDirectory = workingDirectory
         self.stateDirectory = stateDirectory
@@ -34,6 +35,7 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
         self.nodePath = nodePath
         self.codexPath = codexPath
         self.claudePath = claudePath
+        self.mclaudePath = mclaudePath
         self.hermesURL = hermesURL
         self.assistantName = assistantName
     }
@@ -195,6 +197,7 @@ public final class BrainService: ObservableObject {
             switch runtime {
             case .codex: override = configuration?.codexPath ?? ""
             case .claude: override = configuration?.claudePath ?? ""
+            case .mclaude: override = configuration?.mclaudePath ?? ""
             case .hermes: override = ""
             }
             result[runtime] = BrainCatalog.detect(runtime, locator: locator, override: override)
@@ -267,6 +270,7 @@ public final class BrainService: ObservableObject {
         ]
         if let codex = detections[.codex]?.executable { arguments += ["--codex", codex] }
         if let claude = detections[.claude]?.executable { arguments += ["--claude", claude] }
+        if let mclaude = detections[.mclaude]?.executable { arguments += ["--mclaude", mclaude] }
         let hermesURL = configuration.hermesURL.trimmingCharacters(in: .whitespaces)
         if !hermesURL.isEmpty { arguments += ["--runtime-url", hermesURL] }
         if !name.isEmpty { arguments += ["--assistant-name", name] }

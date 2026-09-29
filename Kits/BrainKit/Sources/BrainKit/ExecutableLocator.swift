@@ -120,6 +120,12 @@ public enum BrainCatalog {
             loginCommand: "claude", loginTitle: "Log In",
             docsURL: URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!),
         Entry(
+            runtime: .mclaude, executable: "mclaude",
+            summary: "Claude Code through mechaclaude: one session you can also watch and drive in MechaHUD.",
+            installCommand: "git clone https://github.com/flux627/mechaclaude ~/mechaclaude && cd ~/mechaclaude && ./check-compat.sh --build --promote",
+            loginCommand: "mclaude", loginTitle: "Log In",
+            docsURL: URL(string: "https://github.com/flux627/mechaclaude")!),
+        Entry(
             runtime: .codex, executable: "codex",
             summary: "OpenAI's Codex CLI. Uses your ChatGPT account or API key.",
             installCommand: "brew install --cask codex || npm install -g @openai/codex",
