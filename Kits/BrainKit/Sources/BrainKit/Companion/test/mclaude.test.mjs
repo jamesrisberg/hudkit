@@ -169,6 +169,29 @@ test('a restarted companion reattaches to its live session; a gone session is re
   assert.notEqual(third.snapshot().sessionKey, `claude:${meta.sessionId}`);
 });
 
+test('a companion stopped while its session launches leaves it running and the next one reattaches', async t => {
+  const { makeSession, calls, metas, writes } = await setup(t, { env: { FAKE_MCLAUDE_SIDECAR_DELAY_MS: '400' } });
+  const first = makeSession();
+  const starting = first.initialize().catch(error => error);
+  // The launch is saved as soon as mclaude returns, before its sidecar appears.
+  await waitFor(() => writes.some(state => typeof state.tag === 'string' && Number.isInteger(state.launchPid)), 'the launch saved early');
+  assert.equal((await metas()).length, 0, 'saved before the sidecar');
+  const saved = writes.at(-1);
+  first.runtime.close();
+  assert.ok(await starting instanceof Error);
+  assert.ok(process.kill(saved.launchPid, 0), 'the launched session keeps running');
+  const again = makeSession(saved);
+  await again.initialize();
+  assert.equal((await calls()).length, 1, 'reattached, not launched again');
+  const [meta] = await metas();
+  assert.equal(meta.spawnTag, saved.tag);
+  assert.equal(again.snapshot().sessionKey, `claude:${meta.sessionId}`);
+  assert.equal(writes.at(-1).tag, saved.tag);
+  assert.equal(writes.at(-1).launchPid, undefined, 'a finished launch is no longer pending');
+  await again.submit('hello', 'mclaude-request-0060');
+  await waitFor(() => again.snapshot().status === 'idle' && again.snapshot().output, 'the answer after reattaching');
+});
+
 test('changing permissions relaunches the session on the same conversation', async t => {
   const { makeSession, calls, metas, workspace } = await setup(t);
   const extra = await realpath(await mkdtemp(path.join(tmpdir(), 'bk-mc-extra-')));

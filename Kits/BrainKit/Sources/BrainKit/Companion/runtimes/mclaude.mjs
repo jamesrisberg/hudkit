@@ -61,6 +61,7 @@ export class MclaudeRuntime extends Runtime {
     this.stateDirectory = stateDirectory ?? env.MCLAUDE_STATE_DIR ?? path.join(homedir(), '.claude', 'state-taps');
     Object.assign(this, { startTimeout, readyTimeout, ackTimeout, settleMs, killTimeout, pollInterval });
     this.connection = null; this.meta = null; this.tag = null; this.sessionId = null; this.launchPermissions = null; this.launchOptions = null;
+    this.launchPid = null;
     this.turn = null; this.approvals = new Map(); this.closed = false; this.ready = false; this.clearing = false;
     this.resetView();
   }
@@ -77,12 +78,17 @@ export class MclaudeRuntime extends Runtime {
 
   async start(cwd, { saved = {}, permissions, instructions }) {
     this.cwd = cwd; this.permissions = permissions; this.instructions = instructions;
-    const live = typeof saved.tag === 'string' && saved.tag.startsWith(TAG_PREFIX) ? await this.findSession(saved.tag) : null;
+    const tagged = typeof saved.tag === 'string' && saved.tag.startsWith(TAG_PREFIX);
+    // A launch an earlier companion did not finish: its session may still be writing its sidecar,
+    // and still needs what a launch does once attached (the folder-trust prompt).
+    const unfinished = tagged && Number.isInteger(saved.launchPid) && isAlive(saved.launchPid);
+    const live = unfinished ? await this.awaitSession(saved.tag, saved.launchPid)
+      : tagged ? await this.findSession(saved.tag) : null;
     let lastTurn = null;
     if (live) {
       this.tag = saved.tag; this.launchPermissions = saved.launchPermissions ?? null;
       this.launchOptions = typeof saved.launchOptions === 'string' ? saved.launchOptions : null;
-      await this.attach(live, { launched: false });
+      await this.attach(live, { launched: unfinished });
       // A session started with other permissions, instructions or tool servers resumes its
       // conversation under the new ones, unless it is in the middle of a turn: that is never cut off.
       const changed = !samePermissions(this.launchPermissions, permissions) || this.launchOptions !== this.optionsFingerprint();
@@ -133,19 +139,33 @@ export class MclaudeRuntime extends Runtime {
       }));
     const handle = Object.fromEntries(output.trim().split(/\s+/).map(token => token.split('=')).filter(pair => pair.length === 2));
     const pid = Number(handle.pid) || null;
+    // Saved before the wait: a companion stopped from here on leaves the session running, and
+    // the next one finds it by this tag instead of launching another.
+    this.tag = tag; this.launchPermissions = this.permissions; this.launchOptions = this.optionsFingerprint();
+    this.launchPid = pid;
+    this.emit('persist');
+    const meta = await this.awaitSession(tag, pid);
+    if (this.closed) throw new Error('The mclaude runtime closed while its session started.');
+    if (!meta) {
+      if (pid) await this.endSession(pid);
+      throw new Error(`The mclaude session did not start within ${Math.round(this.startTimeout / 1000)} s.`);
+    }
+    try { await this.attach(meta, { launched: true }); }
+    catch (error) {
+      if (!this.closed) await this.endSession(meta.pid);
+      throw error;
+    }
+    this.launchPid = null;
+  }
+  /** The sidecar of the session launched with `tag`, once written; null after `startTimeout`. */
+  async awaitSession(tag, pid) {
     const deadline = Date.now() + this.startTimeout;
     let meta = null;
     while (!meta && Date.now() < deadline && !this.closed) {
       meta = await this.findSession(tag, pid);
       if (!meta) await delay(150);
     }
-    if (!meta) {
-      if (pid) await this.endSession(pid);
-      throw new Error(`The mclaude session did not start within ${Math.round(this.startTimeout / 1000)} s.`);
-    }
-    this.tag = tag; this.launchPermissions = this.permissions; this.launchOptions = this.optionsFingerprint();
-    try { await this.attach(meta, { launched: true }); }
-    catch (error) { await this.endSession(meta.pid); throw error; }
+    return meta;
   }
   /** The live sidecar mechaclaude wrote for a session launched with this tag. */
   async findSession(tag, pid = null) {
@@ -440,7 +460,10 @@ export class MclaudeRuntime extends Runtime {
     try { await access(this.transcriptPath); return this.sessionId; } catch { return null; }
   }
   snapshot() { return { ...super.snapshot(), sessionKey: this.sessionId ? `claude:${this.sessionId}` : null }; }
-  persistentState() { return { tag: this.tag, launchPermissions: this.launchPermissions, launchOptions: this.launchOptions }; }
+  persistentState() {
+    return { tag: this.tag, launchPermissions: this.launchPermissions, launchOptions: this.launchOptions,
+      ...(this.launchPid ? { launchPid: this.launchPid } : {}) };
+  }
   /** Leaves the session running for MechaHUD and the next start. */
   close() { this.closed = true; clearTimeout(this.settleTimer); this.detach(); }
 }

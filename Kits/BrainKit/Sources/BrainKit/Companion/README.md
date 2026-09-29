@@ -232,7 +232,10 @@ Approved folders and full access are launch options, so changing them relaunches
 with `--resume` on the same conversation.
 
 The session outlives the companion: a restart finds it by its tag and reattaches, and a
-session that has ended is replaced by a new one. Turns typed in MechaHUD or the session's
+session that has ended is replaced by a new one. The tag (and the launched pid) is saved as
+soon as `mclaude` returns, before the sidecar appears, so a companion stopped mid-launch
+leaves the session running and the next one waits for its sidecar and finishes the launch
+there instead of starting another. Turns typed in MechaHUD or the session's
 terminal appear in snapshots as turns without a `requestId` (a submit from the app is refused
 with 409 while one runs), and an approval answered there disappears. A question Claude asks
 (AskUserQuestion) is answered in MechaHUD. Ending a session is mechaclaude's force-exit:
@@ -358,7 +361,7 @@ that launches the real MCP permission bridge (streaming, resume, approvals, SIGI
 cancel, crash, permission modes, socket authentication), the mclaude adapter against a
 fake `mclaude` wrapper and session hub socket (launch arguments, main-conversation text,
 approvals through the select overlay, a turn and an approval driven from a second client,
-interrupt, API error, reattach after restart, relaunch on a permission change, `/clear`,
+interrupt, API error, reattach after restart and after a stop mid-launch, relaunch on a permission change, `/clear`,
 the folder-trust prompt, tmux and missing-install failures), tool servers and host context
 (validation, the exact Codex `-c` and Claude/mclaude `--mcp-config`/`--allowedTools`
 arguments, Codex MCP tool-call approvals, private host files, the Hermes note, mclaude

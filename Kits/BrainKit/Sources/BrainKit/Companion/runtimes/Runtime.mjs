@@ -67,6 +67,10 @@ import { EventEmitter } from 'node:events';
  *   'cancelled'    { turnId, output }           turn was interrupted
  *   'notice'       { error }                    non-fatal runtime error to display
  *   'disconnected' Error                        the runtime is gone; Session fails closed
+ *   'persist'      (none)                       persistentState() changed during start() or a
+ *                                               relaunch (an external session was just launched);
+ *                                               Session saves it now, so a companion stopped
+ *                                               before start() returns finds that session again
  *
  * When a turn ends, the runtime itself declines any approvals still pending for
  * it; Session drops its opaque IDs for them.
