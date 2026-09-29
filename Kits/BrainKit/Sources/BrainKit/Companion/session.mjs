@@ -13,8 +13,9 @@ const RUNTIME_EVENTS = ['started', 'output', 'progress', 'approval', 'approvalRe
  * here so every runtime adapter (runtimes/*.mjs) behaves the same to the app.
  */
 export class Session {
-  constructor({ runtime, cwd, saved = {}, save = async () => {}, createRuntime = null, instructions = voiceInstructions() }) {
+  constructor({ runtime, cwd, saved = {}, save = async () => {}, createRuntime = null, instructions = voiceInstructions(), toolServers = [] }) {
     this.runtime = runtime; this.cwd = cwd; this.save = save; this.createRuntime = createRuntime; this.instructions = instructions;
+    this.toolServerNames = toolServers.map(server => server.name);
     this.hasSavedPermissions = saved.permissions !== undefined;
     this.permissions = saved.permissions ?? { mode: 'approvedFolders', approvedFolders: [cwd] };
     // State of runtimes that are not active, so switching back resumes their conversation.
@@ -42,7 +43,17 @@ export class Session {
   snapshot() {
     const runtime = this.runtime.snapshot();
     return structuredClone({ ...this.state, permissions: this.permissions, routing: runtime.routing,
-      runtime: this.runtime.id, capabilities: this.runtime.capabilities, sessionKey: runtime.sessionKey ?? null });
+      runtime: this.runtime.id, capabilities: this.runtime.capabilities, sessionKey: runtime.sessionKey ?? null,
+      toolServers: this.toolServerStatus() });
+  }
+  /** The host's tool servers and whether the running runtime gives them to the agent. */
+  toolServerStatus() {
+    const names = this.toolServerNames;
+    const active = names.length > 0 && this.runtime.supportsToolServers;
+    const note = names.length && !active
+      ? `${this.runtime.displayName} cannot use this app's tools (${names.join(', ')}); it only has the tools configured in ${this.runtime.displayName} itself. Choose Codex, Claude or mclaude to use them.`
+      : null;
+    return { names: [...names], active, note };
   }
   bind(runtime) {
     const handlers = {

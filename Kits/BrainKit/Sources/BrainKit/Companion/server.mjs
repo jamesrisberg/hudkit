@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { createRuntime, RUNTIME_IDS } from './runtimes/index.mjs';
 import { Session } from './session.mjs';
 import { voiceInstructions } from './voice-instructions.mjs';
+import { parseToolServers, withHostContext } from './tool-servers.mjs';
 
 async function privateRead(file) {
   const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -82,8 +83,8 @@ export function createServer({ session, token }) {
 }
 const USAGE = 'Usage: node server.mjs --cwd /absolute/workspace [--runtime codex|hermes|claude|mclaude] [--state-dir /path] [--port 8788]\n' +
   '  [--codex /path/to/codex] [--claude /path/to/claude] [--mclaude /path/to/mclaude] [--runtime-url http://127.0.0.1:8642] [--runtime-token TOKEN | --runtime-token-file /path]\n' +
-  '  [--assistant-name NAME]';
-const FLAGS = ['--cwd', '--state-dir', '--codex', '--claude', '--mclaude', '--port', '--runtime', '--runtime-url', '--runtime-token', '--runtime-token-file', '--assistant-name'];
+  '  [--assistant-name NAME] [--tool-servers /path/tool-servers.json] [--host-context /path/host-context.md]';
+const FLAGS = ['--cwd', '--state-dir', '--codex', '--claude', '--mclaude', '--port', '--runtime', '--runtime-url', '--runtime-token', '--runtime-token-file', '--assistant-name', '--tool-servers', '--host-context'];
 export function parseArguments(args) {
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -94,6 +95,26 @@ export function parseArguments(args) {
   if (options['--runtime-token'] && options['--runtime-token-file']) throw new Error('Use either --runtime-token or --runtime-token-file');
   if (options['--assistant-name'] !== undefined && !/^[^\n\r]{1,64}$/.test(options['--assistant-name'])) throw new Error('--assistant-name must be one line of at most 64 characters');
   return options;
+}
+const HOST_CONTEXT_LIMIT = 65536;
+/**
+ * The host's tool servers and context. Both files name what the agent runs and is told, so
+ * like the token they must be private, user-owned regular files.
+ */
+export async function loadHostFiles(options) {
+  let toolServers = [];
+  if (options['--tool-servers']) {
+    let value;
+    try { value = JSON.parse(await privateRead(path.resolve(options['--tool-servers']))); }
+    catch (error) { throw new Error(`--tool-servers: ${error.message}`); }
+    toolServers = parseToolServers(value);
+  }
+  let hostContext = '';
+  if (options['--host-context']) {
+    hostContext = (await privateRead(path.resolve(options['--host-context']))).trim();
+    if (hostContext.length > HOST_CONTEXT_LIMIT) throw new Error(`--host-context must be at most ${HOST_CONTEXT_LIMIT} characters`);
+  }
+  return { toolServers, hostContext };
 }
 async function main() {
   const options = parseArguments(process.argv.slice(2));
@@ -111,9 +132,11 @@ async function main() {
   const runtimeToken = options['--runtime-token-file'] ? (await privateRead(path.resolve(options['--runtime-token-file']))).trim() : options['--runtime-token'] ?? process.env.BRAINKIT_RUNTIME_TOKEN;
   // The explicit flag wins; otherwise the choice last made (flag or app) persists in the state directory.
   const runtimeName = options['--runtime'] ?? (RUNTIME_IDS.includes(saved.runtime) ? saved.runtime : 'codex');
-  const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], mclaude: options['--mclaude'], runtimeUrl: options['--runtime-url'], runtimeToken };
+  const { toolServers, hostContext } = await loadHostFiles(options);
+  const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], mclaude: options['--mclaude'], runtimeUrl: options['--runtime-url'], runtimeToken, toolServers };
   const build = name => createRuntime(name, runtimeOptions);
-  const session = new Session({ runtime: build(runtimeName), cwd, saved, createRuntime: build, instructions: voiceInstructions(options['--assistant-name']), save: state => saveState(directory, { ...state, cwd }) });
+  const instructions = withHostContext(voiceInstructions(options['--assistant-name']), hostContext);
+  const session = new Session({ runtime: build(runtimeName), cwd, saved, createRuntime: build, instructions, toolServers, save: state => saveState(directory, { ...state, cwd }) });
   const server = createServer({ session, token });
   // Bind before creating a thread: a second companion on this port must not create work.
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });

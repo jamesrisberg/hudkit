@@ -10,6 +10,7 @@ export const RUNTIME_IDS = Object.keys(RUNTIMES);
 /**
  * Build a runtime from companion options. Only options for the chosen runtime are
  * read; a missing requirement throws a 400 so a bad switch request cannot start work.
+ * Every runtime also receives `toolServers` (validated, see tool-servers.mjs); Hermes ignores them.
  *   codex:  { codex: '/path/to/codex' }
  *   hermes: { runtimeUrl, runtimeToken }
  *   claude: { claude: '/path/to/claude' }
@@ -18,8 +19,9 @@ export const RUNTIME_IDS = Object.keys(RUNTIMES);
 export function createRuntime(name, options = {}) {
   const Adapter = RUNTIMES[name];
   if (!Adapter) throw Object.assign(new Error(`Unknown runtime "${String(name).slice(0, 32)}". Choose one of: ${RUNTIME_IDS.join(', ')}`), { status: 400 });
-  if (name === 'codex') return new CodexRuntime({ executable: options.codex ?? 'codex' });
+  const toolServers = options.toolServers ?? [];
+  if (name === 'codex') return new CodexRuntime({ executable: options.codex ?? 'codex', toolServers });
   if (name === 'hermes') return new HermesRuntime({ url: options.runtimeUrl, token: options.runtimeToken });
-  if (name === 'mclaude') return new MclaudeRuntime({ executable: options.mclaude ?? 'mclaude' });
-  return new ClaudeRuntime({ executable: options.claude ?? 'claude' });
+  if (name === 'mclaude') return new MclaudeRuntime({ executable: options.mclaude ?? 'mclaude', toolServers });
+  return new ClaudeRuntime({ executable: options.claude ?? 'claude', toolServers });
 }

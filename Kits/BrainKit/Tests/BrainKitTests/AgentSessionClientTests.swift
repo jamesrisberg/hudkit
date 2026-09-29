@@ -171,6 +171,16 @@ final class AgentSessionClientTests: XCTestCase {
         XCTAssertNil(none.sessionKey)
     }
 
+    func testSnapshotsCarryTheToolServerStatus() throws {
+        let base = #"{"status":"idle","output":"","progress":"Ready","approvals":[],"revision":1,"runtime":"hermes""#
+        let hermes = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base
+            + #","toolServers":{"names":["machud"],"active":false,"note":"Hermes cannot use this app's tools (machud)."}}"#).utf8))
+        XCTAssertEqual(hermes.toolServers,
+                       AgentToolServerStatus(names: ["machud"], active: false, note: "Hermes cannot use this app's tools (machud)."))
+        let older = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base + "}").utf8))
+        XCTAssertNil(older.toolServers)
+    }
+
     func testServerErrorsCarryStatusAndMessage() async {
         let client = client(ConflictProtocol.self)
         do {

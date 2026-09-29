@@ -19,9 +19,10 @@ async function setup(t, { saved = {}, permissions, env = {} } = {}) {
   const log = path.join(directory, 'calls.jsonl');
   const environment = { ...process.env, MCLAUDE_STATE_DIR: state, FAKE_MCLAUDE_LOG: log, CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', ...env };
   const runtimes = [];
-  const build = () => { const runtime = new MclaudeRuntime({ executable: FAKE, stateDirectory: state, env: environment, settleMs: 50, killTimeout: 2000 }); runtimes.push(runtime); return runtime; };
+  const build = toolServers => { const runtime = new MclaudeRuntime({ executable: FAKE, toolServers, stateDirectory: state, env: environment, settleMs: 50, killTimeout: 2000 }); runtimes.push(runtime); return runtime; };
   const writes = [];
-  const makeSession = (savedState = saved) => new Session({ runtime: build(), cwd: workspace, saved: { ...savedState, ...(permissions ? { permissions } : {}) }, save: async value => writes.push(structuredClone(value)) });
+  const makeSession = (savedState = saved, { toolServers = [], instructions } = {}) => new Session({ runtime: build(toolServers), cwd: workspace, toolServers, ...(instructions ? { instructions } : {}),
+    saved: { ...savedState, ...(permissions ? { permissions } : {}) }, save: async value => writes.push(structuredClone(value)) });
   t.after(async () => {
     for (const runtime of runtimes) runtime.close();
     // End every fake session this test started.
@@ -212,4 +213,39 @@ test('launch failures carry mechaclaude\'s reason in words a user can act on', a
   await assert.rejects(makeSession().initialize(), { message: 'mclaude sessions need tmux: brew install tmux' });
   const missing = new MclaudeRuntime({ executable: '/nonexistent/mclaude' });
   await assert.rejects(missing.start('/w', { saved: {}, permissions: { mode: 'approvedFolders', approvedFolders: ['/w'] }, instructions: '' }), /mclaude is not installed/);
+});
+
+test('tool servers and host context are launch options; a reattached session launched with others is relaunched', async t => {
+  const { makeSession, calls, writes } = await setup(t);
+  const machud = { name: 'machud', command: '/Helpers/machud-mcp', arguments: [], environment: { MACHUD_SOCKET: '/tmp/m.sock' }, requireApproval: false };
+  const asking = { name: 'notes', command: '/bin/notes', arguments: ['mcp'], environment: {}, requireApproval: true };
+  const instructions = 'Voice.\n\n# MacHUD';
+  const first = makeSession(undefined, { toolServers: [machud, asking], instructions });
+  await first.initialize();
+  const [launch] = await calls();
+  assert.deepEqual(JSON.parse(flag(launch.args, '--mcp-config')), { mcpServers: {
+    machud: { type: 'stdio', command: '/Helpers/machud-mcp', args: [], env: { MACHUD_SOCKET: '/tmp/m.sock' } },
+    notes: { type: 'stdio', command: '/bin/notes', args: ['mcp'], env: {} } } });
+  const allowed = launch.args.indexOf('--allowedTools');
+  assert.deepEqual(launch.args.slice(allowed, allowed + 3), ['--allowedTools', 'mcp__machud__*', '--permission-mode']);
+  assert.equal(flag(launch.args, '--append-system-prompt'), instructions);
+  assert.deepEqual(first.snapshot().toolServers, { names: ['machud', 'notes'], active: true, note: null });
+  first.runtime.close();
+  // Same options: reattach without a launch.
+  const same = makeSession(writes.at(-1), { toolServers: [machud, asking], instructions });
+  await same.initialize();
+  assert.equal((await calls()).length, 1);
+  same.runtime.close();
+  // Other tool servers: the session is relaunched with them.
+  const changed = makeSession(writes.at(-1), { toolServers: [machud], instructions });
+  await changed.initialize();
+  const relaunch = (await calls())[1];
+  assert.ok(relaunch, 'a second launch');
+  assert.deepEqual(Object.keys(JSON.parse(flag(relaunch.args, '--mcp-config')).mcpServers), ['machud']);
+  changed.runtime.close();
+  // No tool servers: no MCP flags at all.
+  const none = makeSession(writes.at(-1), { instructions });
+  await none.initialize();
+  const plain = (await calls())[2];
+  assert.ok(plain && !plain.args.includes('--mcp-config') && !plain.args.includes('--allowedTools'));
 });
