@@ -1,12 +1,20 @@
 import { Runtime, bounded } from './Runtime.mjs';
 import { CodexRpc } from './codex-rpc.mjs';
 import { discoverModels, routeInput } from './codex-routing.mjs';
+import { codexConfigArgs } from '../tool-servers.mjs';
 
 const APPROVAL_METHODS = ['item/commandExecution/requestApproval', 'item/fileChange/requestApproval'];
+// Codex asks before an MCP tool call (a tool server with `requireApproval`) as a form
+// elicitation marked `_meta.codex_approval_kind: "mcp_tool_call"`.
+const TOOL_APPROVAL_METHOD = 'mcpServer/elicitation/request';
+const decisionReply = accept => ({ decision: accept ? 'accept' : 'decline' });
+const toolApprovalReply = accept => (accept ? { action: 'accept', content: {} } : { action: 'decline', content: null });
 
 /**
  * Codex CLI through `codex app-server` (stdio JSON-RPC). Codex enforces the folder
  * scope with its own sandbox; approvals are real JSON-RPC requests answered once.
+ * Tool servers are `-c mcp_servers.<name>.…` overrides on the app-server command line
+ * (see tool-servers.mjs); a server that requires approval asks per tool call.
  * Protocol reference: https://developers.openai.com/codex/app-server
  */
 export class CodexRuntime extends Runtime {
@@ -14,22 +22,23 @@ export class CodexRuntime extends Runtime {
   static displayName = 'Codex';
 
   /** `transport` replaces the spawned app-server (tests); it must look like CodexRpc. */
-  constructor({ executable = 'codex', transport = null } = {}) {
+  constructor({ executable = 'codex', transport = null, toolServers = [] } = {}) {
     super();
-    this.executable = executable; this.rpc = transport;
+    this.executable = executable; this.rpc = transport; this.toolServers = toolServers;
     this.threadId = null; this.turnId = null; this.active = false;
-    this.pending = new Map(); // JSON-RPC request ID -> turn ID
+    this.pending = new Map(); // JSON-RPC request ID -> { turnId, reply(accept) }
     this.items = new Map(); this.finalItems = new Map(); this.fileChanges = new Map();
     this.models = {}; this.lastRouteTier = null; this.permissions = null;
   }
   get capabilities() { return { approvals: true, folderScope: true, modelRouting: true, cancel: true }; }
   get dead() { return Boolean(this.rpc?.dead); }
+  get supportsToolServers() { return true; }
 
   async start(cwd, { saved = {}, permissions, instructions }) {
     this.cwd = cwd; this.permissions = permissions; this.instructions = instructions;
     // Advisory affinity survives restart without inventing a historical model or timing.
     this.lastRouteTier = ['fast', 'deep'].includes(saved.lastRouteTier) ? saved.lastRouteTier : null;
-    this.rpc ??= new CodexRpc({ executable: this.executable, cwd });
+    this.rpc ??= new CodexRpc({ executable: this.executable, cwd, configArgs: codexConfigArgs(this.toolServers) });
     this.rpc.on('message', message => this.onMessage(message));
     this.rpc.on('disconnect', error => { this.pending.clear(); this.active = false; this.emit('disconnected', error); });
     await this.rpc.request('initialize', { clientInfo: { name: 'brainkit', title: 'BrainKit', version: '0.1.0' }, capabilities: { experimentalApi: false } });
@@ -78,12 +87,13 @@ export class CodexRuntime extends Runtime {
   onMessage(message) {
     const { method, params: p = {} } = message;
     if (message.id !== undefined) {
+      if (method === TOOL_APPROVAL_METHOD) return this.onToolApproval(message);
       if (!this.active || typeof p.turnId !== 'string' || p.threadId !== this.threadId || (this.turnId && p.turnId !== this.turnId) || this.pending.size >= 8 || (p.grantRoot != null && method !== 'item/fileChange/requestApproval') || !APPROVAL_METHODS.includes(method)) {
         this.rpc.reject(message.id);
         this.emit('progress', { turnId: this.turnId, text: `Unsupported request was denied: ${bounded(method, 128)}` });
         return;
       }
-      this.pending.set(message.id, p.turnId);
+      this.pending.set(message.id, { turnId: p.turnId, reply: decisionReply });
       this.emit('approval', { id: message.id, turnId: p.turnId, kind: method.includes('commandExecution') ? 'command' : 'fileChange', reason: p.reason || 'Permission requested by Codex', command: p.command ? bounded(p.command) : this.fileChanges.get(p.itemId) ?? null, cwd: p.cwd ?? null });
       return;
     }
@@ -117,12 +127,27 @@ export class CodexRuntime extends Runtime {
     }
     if (method === 'turn/completed' && (!this.turnId || p.turn.id === this.turnId)) {
       // Anything still awaiting a decision is refused when its turn ends.
-      for (const id of this.pending.keys()) this.rpc.reply(id, { decision: 'decline' });
+      for (const [id, { reply }] of this.pending) this.rpc.reply(id, reply(false));
       this.pending.clear(); this.active = false; this.turnId = p.turn.id;
       const result = this.turnResult(p.turn);
       this.emit(result.status === 'idle' ? 'completed' : result.status === 'interrupted' ? 'cancelled' : 'failed', result);
     }
     if (method === 'error' && !p.willRetry) this.emit('notice', { error: p.error?.message || 'Agent error' });
+  }
+  /** An MCP tool-call approval for one of our tool servers; any other elicitation is refused. */
+  onToolApproval(message) {
+    const p = message.params ?? {};
+    const turnId = typeof p.turnId === 'string' ? p.turnId : this.turnId;
+    const known = this.toolServers.some(server => server.name === p.serverName);
+    if (!this.active || p.threadId !== this.threadId || !turnId || (this.turnId && turnId !== this.turnId) || this.pending.size >= 8
+      || p._meta?.codex_approval_kind !== 'mcp_tool_call' || p.mode !== 'form' || !known) {
+      this.rpc.reject(message.id);
+      this.emit('progress', { turnId: this.turnId, text: `Unsupported request was denied: ${bounded(p.serverName ?? TOOL_APPROVAL_METHOD, 128)}` });
+      return;
+    }
+    this.pending.set(message.id, { turnId, reply: toolApprovalReply });
+    const tool = typeof p._meta?.tool_title === 'string' ? p._meta.tool_title : null;
+    this.emit('approval', { id: message.id, turnId, kind: 'tool', reason: bounded(p.message || `Use a ${p.serverName} tool`, 1024), command: bounded(tool ? `${p.serverName}: ${tool}` : p.serverName, 1024), cwd: null });
   }
   /** A Codex turn as the runtime contract's { turnId, status, output, error }. */
   turnResult(turn) {
@@ -136,7 +161,7 @@ export class CodexRuntime extends Runtime {
     if (!this.pending.has(id)) throw Object.assign(new Error('Approval is no longer pending'), { status: 409 });
     // Even when file approval includes a grantRoot hint, accept maps to Approved;
     // only acceptForSession maps to the cached ApprovedForSession (Codex 0.153.2).
-    this.rpc.reply(id, { decision: decision === 'accept' ? 'accept' : 'decline' });
+    this.rpc.reply(id, this.pending.get(id).reply(decision === 'accept'));
     this.pending.delete(id);
   }
   async setPermissions(permissions) { this.permissions = permissions; }

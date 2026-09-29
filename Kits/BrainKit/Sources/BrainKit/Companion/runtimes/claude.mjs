@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runtime, bounded } from './Runtime.mjs';
+import { allowedToolPatterns, claudeMcpServers } from '../tool-servers.mjs';
 
 const MCP_SERVER = fileURLToPath(new URL('./claude-permission-mcp.mjs', import.meta.url));
 const MCP_NAME = 'brainkit_permissions';
@@ -17,23 +18,27 @@ const FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
  *   claude -p --input-format stream-json --output-format stream-json --verbose
  *          --include-partial-messages (--session-id <new uuid> | --resume <uuid>)
  *          --permission-mode acceptEdits|bypassPermissions [--add-dir ...]
- *          --mcp-config <bridge> --permission-prompt-tool mcp__brainkit_permissions__approve
+ *          --mcp-config <bridge + tool servers> [--allowedTools mcp__<server>__* ...]
+ *          --permission-prompt-tool mcp__brainkit_permissions__approve
  * Permission prompts reach the companion through claude-permission-mcp.mjs, which
  * Claude Code launches as an MCP stdio server and which connects back over a private
- * Unix socket. Cancellation sends SIGINT, which ends the turn and records it.
+ * Unix socket. Tool servers join the bridge in the same `--mcp-config`; those that do not
+ * require approval are pre-allowed with `--allowedTools`, the others ask like any tool.
+ * Cancellation sends SIGINT, which ends the turn and records it.
  * References: https://code.claude.com/docs/en/headless, https://code.claude.com/docs/en/cli-reference
  */
 export class ClaudeRuntime extends Runtime {
   static id = 'claude';
   static displayName = 'Claude';
 
-  constructor({ executable = 'claude', killGrace = 5000, env = process.env } = {}) {
+  constructor({ executable = 'claude', killGrace = 5000, env = process.env, toolServers = [] } = {}) {
     super();
-    this.executable = executable; this.killGrace = killGrace; this.baseEnv = env;
+    this.executable = executable; this.killGrace = killGrace; this.baseEnv = env; this.toolServers = toolServers;
     this.threadId = null; this.sessionStarted = false; this.turnId = null; this.active = false;
     this.child = null; this.pending = new Map(); this.bridge = null; this.bridgeToken = randomBytes(32).toString('hex');
   }
   get capabilities() { return { approvals: true, folderScope: true, modelRouting: false, cancel: true }; }
+  get supportsToolServers() { return true; }
 
   async start(cwd, { saved = {}, permissions, instructions }) {
     this.cwd = cwd; this.permissions = permissions; this.instructions = instructions;
@@ -88,12 +93,14 @@ export class ClaudeRuntime extends Runtime {
   args() {
     const full = this.permissions.mode === 'fullAccess';
     const extra = this.permissions.approvedFolders.filter(folder => folder !== this.cwd);
-    const mcp = { mcpServers: { [MCP_NAME]: { type: 'stdio', command: process.execPath, args: [MCP_SERVER], env: { BRAINKIT_APPROVAL_SOCKET: this.socketPath } } } };
+    const mcp = { mcpServers: { [MCP_NAME]: { type: 'stdio', command: process.execPath, args: [MCP_SERVER], env: { BRAINKIT_APPROVAL_SOCKET: this.socketPath } }, ...claudeMcpServers(this.toolServers) } };
+    const allowed = allowedToolPatterns(this.toolServers);
     return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
       '--append-system-prompt', this.instructions,
       '--permission-mode', full ? 'bypassPermissions' : 'acceptEdits',
       ...(extra.length ? ['--add-dir', ...extra] : []),
-      '--mcp-config', JSON.stringify(mcp), '--permission-prompt-tool', PERMISSION_TOOL,
+      '--mcp-config', JSON.stringify(mcp), ...(allowed.length ? ['--allowedTools', ...allowed] : []),
+      '--permission-prompt-tool', PERMISSION_TOOL,
       ...(this.sessionStarted ? ['--resume', this.threadId] : ['--session-id', this.threadId])];
   }
   async submit(text, { beforeSend = async () => {} }) {

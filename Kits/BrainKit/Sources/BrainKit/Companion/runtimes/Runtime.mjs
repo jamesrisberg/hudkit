@@ -88,6 +88,12 @@ export class Runtime extends EventEmitter {
    * cancel      - turns can be interrupted
    */
   get capabilities() { return { approvals: false, folderScope: false, modelRouting: false, cancel: false }; }
+  /**
+   * Whether the runtime gives the agent the host's tool servers (`--tool-servers`, passed to
+   * the constructor as `toolServers`). One that does not still runs; the snapshot says why the
+   * tools are missing.
+   */
+  get supportsToolServers() { return false; }
 
   async start(_cwd, _options) { throw new Error(`${this.displayName} runtime does not implement start`); }
   async submit(_text, _options) { throw new Error(`${this.displayName} runtime does not implement submit`); }

@@ -19,7 +19,8 @@ later on the user's Mac and no npm packages.
 | Type | What it does |
 |---|---|
 | `BrainService` | Builds the companion's command line from a `BrainServiceConfiguration`, finds Node.js, runs it under a `ManagedService`, reads its token and hands out clients |
-| `BrainServiceConfiguration` | Runtime, workspace (`--cwd`), state directory, port, and the Node/Codex/Claude/mclaude/Hermes/assistant-name options |
+| `BrainServiceConfiguration` | Runtime, workspace (`--cwd`), state directory, port, the Node/Codex/Claude/mclaude/Hermes/assistant-name options, tool servers and host context |
+| `BrainToolServer`, `AgentToolServerStatus` | A stdio MCP server whose tools the agent gets; the snapshot's report of them |
 | `BrainSettings` | The Codable brain choice and per-runtime options a settings tab binds to; `serviceConfiguration(stateDirectory:port:)` turns it into a configuration |
 | `AgentSessionClient` | Polls complete snapshots and sends turns, approvals, cancel, reset, runtime switches and permissions |
 | `AgentSessionSnapshot` and friends | `AgentRuntime`, `AgentPermissions`, `AgentCapabilities`, `AgentApproval`, `AgentRoute`, `AgentTiming`, `AgentSessionError` |
@@ -53,7 +54,7 @@ import BrainKit
 
 `BrainService` runs `node <Companion>/server.mjs --cwd <workspace> --state-dir <state> --port
 <port> [--codex <path>] [--claude <path>] [--mclaude <path>] [--runtime-url <url>] [--assistant-name <name>]
---runtime <runtime>` in the workspace, with the tools' folders first on `PATH` and
+[--tool-servers <state>/tool-servers.json] [--host-context <state>/host-context.md] --runtime <runtime>` in the workspace, with the tools' folders first on `PATH` and
 `BRAINKIT_PARENT_PIPE=1`. The supervisor holds the child's stdin open; the companion exits
 when it closes, so it never outlives the app, even after a crash. It is ready when it prints
 `Brain companion ready at` (`BrainService.readinessMarker`).
@@ -64,19 +65,30 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
 - **Runtime switches.** A configuration that differs only in `runtime` keeps the running
   process; switch with `AgentSessionClient.setRuntime(_:)` (the companion keeps each
   runtime's conversation). Any other change restarts the process once the old one has
-  exited, so the port is free. `restart()` restarts now and clears the failure count.
+  exited, so the port is free, including a change to the tool servers or host context.
+  `restart()` restarts now and clears the failure count.
+- **Tool servers and host context.** `toolServers` are stdio MCP servers (`name`, `command`,
+  `arguments`, `environment`, `requireApproval`) whose tools the agent gets; `hostContext` is
+  Markdown about the host's world, appended to the runtime's instructions after the voice
+  instructions. They are written to `tool-servers.json` and `host-context.md` (0600) in the
+  state directory, and removed when empty. Codex, Claude and mclaude use the servers; Hermes
+  cannot, and `AgentSessionSnapshot.toolServers` says so in `note`. A server with
+  `requireApproval` false runs its tools without asking; the agent's other actions keep their
+  approval policy. Per-runtime details are in the companion README.
 - **Endpoint.** `endpoint()` and `makeClient()` return nil until the process reports ready.
   The token must be a private (0600), regular, user-owned file of 64 hex digits, as the
   companion itself requires; a symlink is refused.
 - **State directory.** Private (0700, applied to an existing directory too): the 256-bit `token` file (0600), `session.json` with the
-  conversation ids, recent request ids and the folder permissions. The companion refuses a
+  conversation ids, recent request ids and the folder permissions, and the host's
+  `tool-servers.json` and `host-context.md` when given. The companion refuses a
   state directory that belongs to another workspace; `stateDirectory(forWorkspace:under:)`
   derives one per workspace from a hash of its canonical path.
 - **Port.** The host chooses a loopback port (1024-65535). Two apps running a brain at the same
   time need different ports.
 - **Why it cannot run.** Missing workspace, a relative state directory, a bad port, an
   assistant name that is not one line of at most 64 characters (UTF-16 units, the companion's
-  rule), a missing companion or no Node.js 22+ leave `service.state` at `.unavailable(reason)`
+  rule), a tool server without a valid unique name or a command, a host context over 65,536
+  characters, a missing companion or no Node.js 22+ leave `service.state` at `.unavailable(reason)`
   with a sentence to show; `nodeStatus` says which Node.js is used. `node --version` runs on
   the main actor, at most 2 s, once per path; `refreshDetections()` checks again after an
   install or upgrade.
@@ -129,6 +141,7 @@ Names the companion uses:
 | `brainkit-<uuid>` | Hermes session ids the companion creates |
 | `brainkit-<hex>` | name and spawn tag of the mclaude session the companion starts (tmux, MechaHUD) |
 | `--assistant-name NAME` | the name the voice instructions give the assistant; none by default |
+| `--tool-servers`, `--host-context` | the host's tool servers and context, files in the state directory |
 | `~/.brainkit-companion` | default state directory when the companion is run by hand |
 
 ## Tests

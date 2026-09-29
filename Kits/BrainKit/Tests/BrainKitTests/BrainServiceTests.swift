@@ -129,6 +129,95 @@ final class BrainServiceTests: XCTestCase {
         XCTAssertEqual(launcher.launched.count, 2)
     }
 
+    func testToolServersAndHostContextArePrivateFilesAndFlags() throws {
+        var config = configuration(.claude)
+        config.toolServers = [
+            BrainToolServer(name: "machud", command: "/Apps/MacHUD.app/Contents/Helpers/machud-mcp",
+                            environment: ["MACHUD_SOCKET": "/tmp/machud.sock"]),
+            BrainToolServer(name: "notes", command: "notes", arguments: ["mcp"], requireApproval: true),
+        ]
+        config.hostContext = "\n# MacHUD\nYou drive MacHUD.\n"
+        let service = make()
+        service.configure(config)
+        let state = root.appendingPathComponent("state")
+        let servers = state.appendingPathComponent("tool-servers.json")
+        let context = state.appendingPathComponent("host-context.md")
+        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(6)), [
+            "--tool-servers", servers.path, "--host-context", context.path, "--runtime", "claude",
+        ])
+        for file in [servers, context] {
+            let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
+            XCTAssertEqual(mode, 0o600, file.lastPathComponent)
+        }
+        XCTAssertEqual(try String(contentsOf: context, encoding: .utf8), "# MacHUD\nYou drive MacHUD.")
+        let written = try JSONSerialization.jsonObject(with: Data(contentsOf: servers)) as? [[String: Any]]
+        XCTAssertEqual(written?.count, 2)
+        XCTAssertEqual(written?[0]["name"] as? String, "machud")
+        XCTAssertEqual(written?[0]["command"] as? String, "/Apps/MacHUD.app/Contents/Helpers/machud-mcp")
+        XCTAssertEqual(written?[0]["arguments"] as? [String], [])
+        XCTAssertEqual(written?[0]["environment"] as? [String: String], ["MACHUD_SOCKET": "/tmp/machud.sock"])
+        XCTAssertEqual(written?[0]["requireApproval"] as? Bool, false)
+        XCTAssertEqual(written?[1]["requireApproval"] as? Bool, true)
+        XCTAssertEqual(try JSONDecoder().decode([BrainToolServer].self, from: Data(contentsOf: servers)), config.toolServers)
+
+        // A changed file restarts the companion (debounced), which reads it again.
+        launcher.last.say("Brain companion ready at")
+        config.hostContext = "# MacHUD\nTwo apps installed."
+        service.configure(config)
+        scheduler.advance(0.4)
+        XCTAssertTrue(launcher.launched[0].terminated)
+        launcher.launched[0].exit(0)
+        XCTAssertEqual(launcher.launched.count, 2)
+        XCTAssertEqual(try String(contentsOf: context, encoding: .utf8), "# MacHUD\nTwo apps installed.")
+
+        // Removing them removes the files and the flags.
+        launcher.last.say("Brain companion ready at")
+        config.toolServers = []
+        config.hostContext = "  "
+        service.configure(config)
+        scheduler.advance(0.4)
+        launcher.launched[1].exit(0)
+        XCTAssertEqual(launcher.launched.count, 3)
+        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(2)), ["--runtime", "claude"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: servers.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: context.path))
+    }
+
+    func testSameToolServersAndRuntimeOnlyChangeKeepTheProcess() {
+        var config = configuration(.codex)
+        config.toolServers = [BrainToolServer(name: "machud", command: "/bin/machud-mcp")]
+        config.hostContext = "# MacHUD"
+        let service = make()
+        service.configure(config)
+        launcher.last.say("Brain companion ready at")
+        config.runtime = .claude
+        service.configure(config)
+        scheduler.advance(0.4)
+        XCTAssertEqual(launcher.launched.count, 1)
+        XCTAssertFalse(launcher.launched[0].terminated)
+    }
+
+    func testInvalidToolServersExplainThemselves() {
+        func reason(_ servers: [BrainToolServer], context: String = "") -> String {
+            var config = configuration()
+            config.toolServers = servers
+            config.hostContext = context
+            let service = make()
+            service.configure(config)
+            guard case .unavailable(let reason) = service.service.state else { return "\(service.service.state)" }
+            return reason
+        }
+        XCTAssertEqual(reason([BrainToolServer(name: "mac hud", command: "/x")]),
+                       "The tool server name \"mac hud\" must be letters, digits, _ or - (at most 64).")
+        XCTAssertEqual(reason([BrainToolServer(name: "brainkit_permissions", command: "/x")]),
+                       "The tool server name \"brainkit_permissions\" must be letters, digits, _ or - (at most 64).")
+        XCTAssertEqual(reason([BrainToolServer(name: "machud", command: "")]), "The tool server machud needs a command.")
+        XCTAssertEqual(reason([BrainToolServer(name: "a", command: "/x"), BrainToolServer(name: "a", command: "/y")]),
+                       "Each tool server needs its own name.")
+        XCTAssertEqual(reason([], context: String(repeating: "x", count: 65537)), "The brain's host context is too long.")
+        XCTAssertTrue(launcher.launched.isEmpty)
+    }
+
     func testUnavailableConfigurationsExplainThemselves() {
         func reason(_ config: BrainServiceConfiguration, companion: URL? = nil) -> String {
             let service = make(companionDirectory: companion)

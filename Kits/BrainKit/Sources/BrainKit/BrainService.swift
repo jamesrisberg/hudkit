@@ -24,10 +24,17 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
     public var hermesURL: String
     /// Name the voice instructions give the assistant (`--assistant-name`); empty names none.
     public var assistantName: String
+    /// MCP servers whose tools the agent gets (`--tool-servers`, a file in the state directory).
+    public var toolServers: [BrainToolServer]
+    /// Markdown describing the host's world to the agent, appended to the runtime's
+    /// instructions after the voice instructions (`--host-context`, a file in the state
+    /// directory); empty adds nothing.
+    public var hostContext: String
 
     public init(runtime: AgentRuntime, workingDirectory: String, stateDirectory: String, port: Int,
                 nodePath: String = "", codexPath: String = "", claudePath: String = "",
-                mclaudePath: String = "", hermesURL: String = "", assistantName: String = "") {
+                mclaudePath: String = "", hermesURL: String = "", assistantName: String = "",
+                toolServers: [BrainToolServer] = [], hostContext: String = "") {
         self.runtime = runtime
         self.workingDirectory = workingDirectory
         self.stateDirectory = stateDirectory
@@ -38,7 +45,15 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
         self.mclaudePath = mclaudePath
         self.hermesURL = hermesURL
         self.assistantName = assistantName
+        self.toolServers = toolServers
+        self.hostContext = hostContext
     }
+
+    /// The files the companion reads `--tool-servers` and `--host-context` from.
+    public static let toolServersFileName = "tool-servers.json"
+    public static let hostContextFileName = "host-context.md"
+    /// The companion's limit on the host context (UTF-16 code units, like JavaScript's length).
+    public static let hostContextLimit = 65536
 
     /// `<base>/<hash of the canonical workspace path>`: the companion refuses a state
     /// directory that belongs to another workspace, so each workspace gets its own.
@@ -70,6 +85,8 @@ public struct ServiceEndpoint: Equatable, Sendable {
 /// restart the companion per keystroke. A configuration that differs only in `runtime` keeps
 /// the running process (the host switches with `AgentSessionClient.setRuntime`; the new flag
 /// applies at the next start); any other change restarts it, after the old process exits.
+/// That includes the tool servers and host context: they are written to private files in the
+/// state directory and the companion reads them once at start.
 @MainActor
 public final class BrainService: ObservableObject {
     /// The line the companion prints once it listens.
@@ -180,7 +197,8 @@ public final class BrainService: ObservableObject {
             if built.key == lastKey, service.spec != nil {
                 service.replaceSpecWithoutRestart(built.spec)
             } else {
-                service.configure(.success(built.spec))
+                // Forced: a changed host file leaves the command line as it was.
+                service.configure(.success(built.spec), force: true)
             }
             lastKey = built.key
         case .failure(let reason):
@@ -261,10 +279,44 @@ public final class BrainService: ObservableObject {
         guard name.utf16.count <= 64, !name.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\r\n" }) else {
             return .failure(ServiceUnavailable(reason: "The assistant name must be one line of at most 64 characters."))
         }
+        for server in configuration.toolServers {
+            guard BrainToolServer.isValidName(server.name) else {
+                return .failure(ServiceUnavailable(reason: "The tool server name \"\(server.name)\" must be letters, digits, _ or - (at most 64)."))
+            }
+            guard !server.command.isEmpty, !server.command.contains(where: \.isNewline) else {
+                return .failure(ServiceUnavailable(reason: "The tool server \(server.name) needs a command."))
+            }
+        }
+        guard Set(configuration.toolServers.map(\.name)).count == configuration.toolServers.count else {
+            return .failure(ServiceUnavailable(reason: "Each tool server needs its own name."))
+        }
+        let hostContext = configuration.hostContext.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard hostContext.utf16.count <= BrainServiceConfiguration.hostContextLimit else {
+            return .failure(ServiceUnavailable(reason: "The brain's host context is too long."))
+        }
         try? fileManager.createDirectory(
             atPath: stateDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // An existing directory keeps its mode on create; the token and conversation state are private.
         try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stateDirectory)
+        let state = URL(fileURLWithPath: stateDirectory, isDirectory: true)
+        let toolServersFile = state.appendingPathComponent(BrainServiceConfiguration.toolServersFileName)
+        let hostContextFile = state.appendingPathComponent(BrainServiceConfiguration.hostContextFileName)
+        var toolServersJSON = ""
+        if configuration.toolServers.isEmpty {
+            try? fileManager.removeItem(at: toolServersFile)
+        } else {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            guard let data = try? encoder.encode(configuration.toolServers),
+                  Self.writePrivate(data, to: toolServersFile)
+            else { return .failure(ServiceUnavailable(reason: "The brain's tool servers could not be saved in \(stateDirectory).")) }
+            toolServersJSON = String(decoding: data, as: UTF8.self)
+        }
+        if hostContext.isEmpty {
+            try? fileManager.removeItem(at: hostContextFile)
+        } else if !Self.writePrivate(Data(hostContext.utf8), to: hostContextFile) {
+            return .failure(ServiceUnavailable(reason: "The brain's host context could not be saved in \(stateDirectory)."))
+        }
         var arguments = [
             server.path, "--cwd", workspace, "--state-dir", stateDirectory, "--port", String(configuration.port),
         ]
@@ -274,7 +326,10 @@ public final class BrainService: ObservableObject {
         let hermesURL = configuration.hermesURL.trimmingCharacters(in: .whitespaces)
         if !hermesURL.isEmpty { arguments += ["--runtime-url", hermesURL] }
         if !name.isEmpty { arguments += ["--assistant-name", name] }
-        let key = [node] + arguments
+        if !toolServersJSON.isEmpty { arguments += ["--tool-servers", toolServersFile.path] }
+        if !hostContext.isEmpty { arguments += ["--host-context", hostContextFile.path] }
+        // The files' contents are part of the key: the companion reads them only at start.
+        let key = [node] + arguments + [toolServersJSON, hostContext]
         arguments += ["--runtime", configuration.runtime.rawValue]
         let toolDirectories = detections.values.compactMap { $0.executable }
             .map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
@@ -286,6 +341,28 @@ public final class BrainService: ObservableObject {
         let spec = ProcessSpec(executable: node, arguments: arguments, environment: environment,
                                currentDirectory: workspace)
         return .success(BuiltSpec(spec: spec, key: key))
+    }
+
+    /// Writes `data` as a private (0600) file, replacing any file or link there atomically:
+    /// the companion refuses a host file anyone else can read or that is a symlink.
+    static func writePrivate(_ data: Data, to url: URL) -> Bool {
+        let temporary = url.deletingLastPathComponent()
+            .appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        let descriptor = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return false }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        do {
+            try handle.write(contentsOf: data)
+            try handle.close()
+        } catch {
+            unlink(temporary.path)
+            return false
+        }
+        guard rename(temporary.path, url.path) == 0 else {
+            unlink(temporary.path)
+            return false
+        }
+        return true
     }
 
     /// Node.js 22 or later, from the override or the usual places; sets `nodeStatus`.
