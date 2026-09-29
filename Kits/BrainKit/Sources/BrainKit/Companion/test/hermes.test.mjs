@@ -221,3 +221,17 @@ test('SSE parsing skips comments and keepalives; URL and environment discovery a
   await writeFile(path.join(home, '.env'), 'OPENROUTER_API_KEY=secret\nAPI_SERVER_ENABLED=true\nexport API_SERVER_KEY="abc123"\nAPI_SERVER_PORT=8650\n');
   assert.deepEqual(await readHermesEnvironment(home), { API_SERVER_KEY: 'abc123', API_SERVER_PORT: '8650' });
 });
+
+test('tool servers are not given to Hermes: the snapshot says so and the runtime still works', async t => {
+  const hermes = await fakeHermes(t);
+  const runtime = new HermesRuntime({ url: hermes.url, token: KEY, pollInterval: 20, readEnvironment: async () => ({}) });
+  t.after(() => runtime.close());
+  const toolServers = [{ name: 'machud', command: '/Helpers/machud-mcp', arguments: [], environment: {}, requireApproval: false }];
+  const session = new Session({ runtime, cwd: '/workspace', toolServers });
+  await session.initialize();
+  const { toolServers: status, status: state, error } = session.snapshot();
+  assert.equal(state, 'idle'); assert.equal(error, null);
+  assert.deepEqual(status.names, ['machud']);
+  assert.equal(status.active, false);
+  assert.match(status.note, /^Hermes cannot use this app's tools \(machud\)/);
+});

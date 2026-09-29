@@ -48,6 +48,10 @@ Flags:
   `$HERMES_HOME/.env` (default `~/.hermes/.env`); the token is never persisted.
 - `--assistant-name NAME` — the name the voice instructions give the assistant (one
   line, at most 64 characters). Without it the instructions name none.
+- `--tool-servers /path/tool-servers.json` (mode 0600) — stdio MCP servers whose tools the
+  agent gets; see Tool servers and host context.
+- `--host-context /path/host-context.md` (mode 0600) — Markdown describing the host app's
+  world, appended to the voice instructions (at most 65,536 characters).
 
 Keep the terminal running; the companion does not install a launch agent. A host
 app connects to `http://127.0.0.1:8788` with the 256-bit token the companion creates
@@ -71,6 +75,38 @@ resumes the saved conversation. A lost HTTP response never means an action did n
 execute: inspect the current session before repeating it. App disconnection alone
 does not cancel an agent turn. New conversation resets the conversation only while
 idle; the old history remains in the runtime's own store.
+
+### Tool servers and host context
+
+A host app can give its brain tools and a description of its world. `BrainService` writes
+both into the state directory (`tool-servers.json`, `host-context.md`, mode 0600) and passes
+them with `--tool-servers` and `--host-context`; the companion reads them once at start
+(a change restarts it) and refuses files that are not private, user-owned regular files.
+`tool-servers.json` is an array of stdio MCP servers:
+
+```json
+[{ "name": "machud", "command": "/Applications/MacHUD.app/Contents/Helpers/machud-mcp",
+   "arguments": [], "environment": { "MACHUD_SOCKET": "/tmp/machud.sock" }, "requireApproval": false }]
+```
+
+Names are letters, digits, `_` and `-` (at most 64, `brainkit_permissions` is reserved);
+unknown keys, duplicate names and non-string arguments or environment values are refused
+(`tool-servers.mjs`). How each runtime gets them:
+
+| Runtime | Tool servers | `requireApproval: false` | `requireApproval: true` |
+|---|---|---|---|
+| `codex` | `codex app-server -c mcp_servers.<name>.command="…" -c mcp_servers.<name>.args=[…] [-c mcp_servers.<name>.env={ "K" = "v" }]` (values are TOML) | `-c mcp_servers.<name>.default_tools_approval_mode="approve"`: no prompt | `…="prompt"`: every call asks (an `mcpServer/elicitation/request` with `_meta.codex_approval_kind: "mcp_tool_call"`, shown as a `tool` approval; Allow answers `{"action":"accept","content":{}}`, Deny `{"action":"decline"}`) |
+| `hermes` | not supported | | |
+
+Only elicitations from a configured tool server that are tool-call approvals become
+approvals; any other elicitation is refused, which Codex treats as a decline. The host
+context is appended, after a blank line, to the instructions every runtime receives:
+Hermes' run `instructions`. Snapshots report the servers as `toolServers: { names, active,
+note }`; with Hermes `active` is false and `note` says Hermes cannot use them (Hermes only has
+the tools configured in Hermes itself). Tool servers and host context are launch options for
+The Codex form was checked against Codex 0.155.1: with these overrides `config/read` shows the
+servers with their environment and approval mode, and `mcpServerStatus/list` lists a
+configured stdio server's tools, without a model turn.
 
 ### Codex
 
@@ -135,7 +171,8 @@ Install Claude Code and sign in by running `claude` once. Each turn runs
 claude -p --input-format stream-json --output-format stream-json --verbose --include-partial-messages
        (--session-id <new uuid> | --resume <uuid>) --append-system-prompt <voice instructions>
        --permission-mode acceptEdits|bypassPermissions [--add-dir <approved folder>...]
-       --mcp-config <bridge> --permission-prompt-tool mcp__brainkit_permissions__approve
+       --mcp-config <bridge + tool servers> [--allowedTools mcp__<server>__*...]
+       --permission-prompt-tool mcp__brainkit_permissions__approve
 ```
 
 in the workspace. Approved folders map to `acceptEdits` with the extra folders as
@@ -174,6 +211,7 @@ persistence, opaque approval IDs, timing, the snapshot — and talks to one runt
 | `snapshot()` → `{ routing, sessionKey }` | runtime-specific snapshot fields; `sessionKey` names an external session, or null |
 | `persistentState()` | extra JSON saved in the state directory, returned as `saved` |
 | `capabilities` | `{ approvals, folderScope, modelRouting, cancel }` |
+| `supportsToolServers` | whether the runtime gives the agent the `toolServers` its constructor received |
 | `close()` | release processes and connections |
 
 Events: `started {turnId}`, `output {turnId, text}` (the full visible text so far),
@@ -240,6 +278,7 @@ Snapshots contain `threadId`, `turnId`, `status`, `output`, `progress`, `approva
 `requestId`, `route`, `timing`, `permissions` (mode and approved folders),
 `routing`, then `runtime` (the runtime ID), `capabilities`
 (`approvals`, `folderScope`, `modelRouting`, `cancel`) and `sessionKey` (the external
+(`names`, `active`, `note`; see Tool servers and host context). The fields before `runtime`
 keep a fixed order and encoding, and new fields are only appended after them
 (`test/snapshot-compat.test.mjs`).
 Status is `idle`, `running`, `approval`, `interrupted`, or `failed`. `idle` with a
@@ -269,7 +308,8 @@ receipts, permission policy), the Hermes adapter against a fake gateway speaking
 Runs API and SSE (deltas, progress, approval round trip, stop, degraded
 capabilities, dropped stream, restart), the Claude adapter against a fake `claude`
 that launches the real MCP permission bridge (streaming, resume, approvals, SIGINT
-cancel, crash, permission modes, socket authentication), runtime switching, HTTP
+cancel, crash, permission modes, socket authentication), tool servers and host context
+relaunch on a change), runtime switching, HTTP
 auth/Host/Origin checks, body limits, file permissions, and snapshot byte
 compatibility. The smoke test initializes the installed Codex protocol and reads
 signed-in status; it does not start a model turn.

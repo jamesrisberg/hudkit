@@ -3,10 +3,11 @@ import { EventEmitter } from 'node:events';
 
 /** A private stdio connection; the app-server never opens a network listener. */
 export class CodexRpc extends EventEmitter {
-  constructor({ executable = 'codex', cwd, timeout = 30000 } = {}) {
+  /** `configArgs` are `-c key=value` overrides for `codex app-server` (tool servers). */
+  constructor({ executable = 'codex', cwd, timeout = 30000, configArgs = [] } = {}) {
     super();
     this.pending = new Map(); this.nextID = 1; this.timeout = timeout;
-    this.child = spawn(executable, ['app-server'], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawn(executable, ['app-server', ...configArgs], { cwd, stdio: ['pipe', 'pipe', 'pipe'] });
     let buffer = '';
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', chunk => {

@@ -16,7 +16,7 @@ const GOLDEN = [
   "{\"threadId\":\"thread-1\",\"turnId\":\"turn-1\",\"status\":\"idle\",\"output\":\"Created.\",\"progress\":\"Done\",\"approvals\":[],\"error\":null,\"revision\":12,\"instanceId\":\"X\",\"requestId\":\"request-000000001\",\"route\":{\"tier\":\"fast\",\"model\":\"gpt-5.6-luna\",\"effort\":\"low\",\"reason\":\"Straightforward request\"},\"timing\":{\"startedAt\":\"N\",\"firstResponseMs\":\"N\",\"completedMs\":\"N\"},\"permissions\":{\"mode\":\"approvedFolders\",\"approvedFolders\":[\"/workspace\"]},\"routing\":{\"mode\":\"automatic\",\"available\":true,\"fastModel\":\"gpt-5.6-luna\",\"deepModel\":\"gpt-6-astra\"}}",
   "{\"threadId\":\"thread-1\",\"turnId\":null,\"status\":\"idle\",\"output\":\"\",\"progress\":\"Ready\",\"approvals\":[],\"error\":null,\"revision\":13,\"instanceId\":\"X\",\"requestId\":null,\"route\":null,\"timing\":null,\"permissions\":{\"mode\":\"approvedFolders\",\"approvedFolders\":[\"/workspace\"]},\"routing\":{\"mode\":\"automatic\",\"available\":true,\"fastModel\":\"gpt-5.6-luna\",\"deepModel\":\"gpt-6-astra\"}}",
 ];
-const APPENDED = ['runtime', 'capabilities', 'sessionKey'];
+const APPENDED = ['runtime', 'capabilities', 'sessionKey', 'toolServers'];
 
 class FakeCodex extends EventEmitter {
   async request(method, params) {
@@ -48,6 +48,7 @@ test('HTTP snapshots keep the golden fields and bytes, with runtime fields appen
     assert.deepEqual(Object.keys(value).slice(-APPENDED.length), APPENDED);
     assert.equal(value.runtime, 'codex');
     assert.equal(value.sessionKey, null);
+    assert.deepEqual(value.toolServers, { names: [], active: false, note: null });
     assert.deepEqual(value.capabilities, { approvals: true, folderScope: true, modelRouting: true, cancel: true });
     for (const key of APPENDED) delete value[key];
     seen.push(JSON.stringify(mask(value)));
