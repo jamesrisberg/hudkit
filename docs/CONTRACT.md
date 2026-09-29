@@ -1,6 +1,6 @@
 # The MacHUD app contract
 
-**Contract version 0.1** (HUDKit 0.1.0, `HUDKit.version`). This is the canonical spec of what a
+**Contract version 0.2** (HUDKit 0.2.0, `HUDKit.version`). This is the canonical spec of what a
 MacHUD app ships and serves, and what MacHUD does with it. Every statement here was checked
 against HUDKit's code (`Sources/HUDKit`) and MacHUD's (`~/dev/machud/Sources/MacHUDCore`); when
 another document disagrees, this one and the code win.
@@ -171,7 +171,7 @@ Replies are shown with keys in a readable order.
 
 ```json
 {"command": "hello"}
-{"ok": true, "hudkit": "0.1.0", "app": "xyz.machud.tallyhud", "name": "TallyHUD", "version": "0.1.0",
+{"ok": true, "hudkit": "0.2.0", "app": "xyz.machud.tallyhud", "name": "TallyHUD", "version": "0.1.0",
  "panels": [{"id": "main", "title": "TallyHUD", "symbol": "number.circle", "kind": "hover", "order": 90,
              "defaultSize": [320, 160], "capabilities": ["acceptsFileDrop"],
              "verbs": ["show", "hide", "toggle", "frame", "mode", "say", "bump", "reset", "drop"],

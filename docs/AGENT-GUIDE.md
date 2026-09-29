@@ -1,7 +1,7 @@
 # Building a MacHUD app: the agent playbook
 
 For an AI coding agent asked to "make me a MacHUD app that does X". Follow the steps in order;
-every command here was run as written (macOS 26.6, Swift 6.4, HUDKit 0.1.0). The
+every command here was run as written (macOS 26.6, Swift 6.4, HUDKit 0.2.0). The
 spec behind it is [CONTRACT.md](CONTRACT.md); the CLI grammar is [CLI.md](CLI.md); repo rules
 are [CONVENTIONS.md](CONVENTIONS.md).
 
@@ -1004,7 +1004,7 @@ build/TallyHUD.app/Contents/MacOS/TallyHUD --snapshot /tmp/tallyhud.png    # pri
 build/TallyHUD.app/Contents/MacOS/TallyHUD > /tmp/tallyhud-test.log 2>&1 &
 CLI=build/TallyHUD.app/Contents/Helpers/tallyhud
 for i in {1..50}; do $CLI hello > /dev/null 2>&1 && break; sleep 0.2; done
-$CLI hello                       # "ok": true, "hudkit": "0.1.0", "app": "xyz.machud.tallyhud", "version": "0.1.0"
+$CLI hello                       # "ok": true, "hudkit": "0.2.0", "app": "xyz.machud.tallyhud", "version": "0.1.0"
 $CLI panel show id=main          # "visible": true
 $CLI state                       # panels[0]: "id": "main", "visible": true, "badge": "0"
 $CLI bump 2                      # "count": 2

@@ -11,5 +11,5 @@
 ///   `HUDMenuHost` (hide the status item while MacHUD hosts the menu).
 public enum HUDKit {
     /// Semantic version of the contract this build implements; reported by `hello`.
-    public static let version = "0.1.0"
+    public static let version = "0.2.0"
 }

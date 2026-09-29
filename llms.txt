@@ -5,7 +5,7 @@
 ## Read in this order
 
 - [Agent guide](docs/AGENT-GUIDE.md): step-by-step playbook to build a MacHUD app, with a complete worked example, the verification sequence, pitfalls and the definition of done
-- [Contract](docs/CONTRACT.md): the canonical spec (version 0.1): manifest schema, socket and framing, every verb with request/reply/error examples, subscribe events, settings schema, docks.json, hover vs windowed behaviour, file drops, what MacHUD guarantees, compliance checklist
+- [Contract](docs/CONTRACT.md): the canonical spec (version 0.2): manifest schema, socket and framing, every verb with request/reply/error examples, subscribe events, settings schema, docks.json, hover vs windowed behaviour, file drops, what MacHUD guarantees, compliance checklist
 - [CLI](docs/CLI.md): the per-app `<repo>` CLI (grammar, exit codes, env), app shorthands, raw `nc -U`, and `machud`
 - [Conventions](docs/CONVENTIONS.md): repo layout, names, build/install scripts, icons, versions, commits
 - [BrainKit](Kits/BrainKit/README.md): the separate BrainKit package (Kits/BrainKit), a local agent brain (Codex, Claude Code, Hermes) behind a bundled Node companion

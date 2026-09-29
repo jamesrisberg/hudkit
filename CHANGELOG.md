@@ -7,6 +7,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-29
+
 ### Added
 - `HUDNotchGeometry`: pure frame math for a panel anchored under the notch, or hanging from the
   menu bar (or the bare screen edge in full screen) on a screen without one.
@@ -59,6 +61,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   through links beside it.
 - `hud-build.sh` copies every `@rpath` framework the app or a helper links (such as
   `Sparkle.framework`) into `Contents/Frameworks` and signs it, so the bundle loads it at runtime.
+- `hud-release.sh` builds a sibling path package at the remote branch its checkout tracks (else
+  `origin/main`), and a `../hudkit/Kits/<Kit>` package from HUDKit at `HUDKIT_REF`.
 
 **VoiceKit** (a separate package in `Kits/VoiceKit`; apps that depend only on HUDKit do not
 fetch or build it)
