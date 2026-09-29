@@ -1,6 +1,5 @@
 # BrainKit
 
-BrainKit gives a macOS app a local agent "brain": Codex, Claude Code or Hermes, reached
 through a small Node service (the companion) that the app launches, supervises and talks to
 over loopback HTTP. It is its own Swift package in the HUDKit repository (`Kits/BrainKit`); an app that
 depends only on HUDKit does not fetch or build it.
@@ -18,13 +17,11 @@ later on the user's Mac and no npm packages.
 | Type | What it does |
 |---|---|
 | `BrainService` | Builds the companion's command line from a `BrainServiceConfiguration`, finds Node.js, runs it under a `ManagedService`, reads its token and hands out clients |
-| `BrainServiceConfiguration` | Runtime, workspace (`--cwd`), state directory, port, and the Node/Codex/Claude/Hermes/assistant-name options |
 | `BrainSettings` | The Codable brain choice and per-runtime options a settings tab binds to; `serviceConfiguration(stateDirectory:port:)` turns it into a configuration |
 | `AgentSessionClient` | Polls complete snapshots and sends turns, approvals, cancel, reset, runtime switches and permissions |
 | `AgentSessionSnapshot` and friends | `AgentRuntime`, `AgentPermissions`, `AgentCapabilities`, `AgentApproval`, `AgentRoute`, `AgentTiming`, `AgentSessionError` |
 | `TranscriptModel` | Reduces snapshots plus what the user said into transcript rows (user, reply, progress, approval, notice) and events (`turnStarted`, `firstOutput`, `approvalAdded`, `turnEnded`) |
 | `ManagedService` | Keeps one child process running: readiness line, exponential backoff (1 s doubling to 30 s), gives up after 6 failed starts, 45 s readiness timeout, failures reset after 60 s up; a replaced process exits before its successor starts (at most 10 s wait); a failure's reason is the child's last output line |
-| `ExecutableLocator`, `BrainCatalog` | Find `node`, `codex`, `claude`, `hermes` the way a login shell would; install and sign-in commands per brain; Hermes API server detection |
 | `BrainCompanion` | Locates the bundled companion folder |
 
 ## Running a brain
@@ -51,7 +48,6 @@ import BrainKit
 ```
 
 `BrainService` runs `node <Companion>/server.mjs --cwd <workspace> --state-dir <state> --port
-<port> [--codex <path>] [--claude <path>] [--runtime-url <url>] [--assistant-name <name>]
 --runtime <runtime>` in the workspace, with the tools' folders first on `PATH` and
 `BRAINKIT_PARENT_PIPE=1`. The supervisor holds the child's stdin open; the companion exits
 when it closes, so it never outlives the app, even after a crash. It is ready when it prints
@@ -79,10 +75,10 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
   with a sentence to show; `nodeStatus` says which Node.js is used. `node --version` runs on
   the main actor, at most 2 s, once per path; `refreshDetections()` checks again after an
   install or upgrade.
-- **Brains.** `detections` lists which of `codex`, `claude` and `hermes` are installed (and
-  whether Hermes' API server is enabled in `~/.hermes/.env`). The companion reports what the
-  running runtime can honour in `capabilities`; show or hide approvals, folder scope, model
-  routing and cancel from it.
+  installed (and whether Hermes' API server is enabled in `~/.hermes/.env`). The companion
+  reports what the running runtime can honour in `capabilities`; show or hide approvals, folder
+  scope, model routing and cancel from it.
+  can ask the app that shows agent sessions to open it. Turns typed there appear in the
 
 ## Settings
 
@@ -91,7 +87,6 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
 ```json
 { "runtime": "codex", "workspacePath": "/Users/me/Assistant", "assistantName": "",
   "nodePath": "", "codex": { "executablePath": "" }, "claude": { "executablePath": "" },
-  "hermes": { "url": "" } }
 ```
 
 Empty paths are found on `PATH` and the common install folders (Homebrew, `~/.local/bin`,

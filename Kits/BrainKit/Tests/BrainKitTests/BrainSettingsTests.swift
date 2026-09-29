@@ -6,7 +6,7 @@ final class BrainSettingsTests: XCTestCase {
         let settings = BrainSettings(
             runtime: .hermes, workspacePath: "/Users/test/Assistant", assistantName: "Jarvis",
             nodePath: "/opt/homebrew/bin/node", codex: .init(executablePath: "/opt/homebrew/bin/codex"),
-            claude: .init(executablePath: "~/.local/bin/claude"), hermes: .init(url: "http://127.0.0.1:8642"))
+            claude: .init(executablePath: "~/.local/bin/claude"), hermes: .init(url: "http://127.0.0.1:8642"),
         let data = try JSONEncoder().encode(settings)
         XCTAssertEqual(try JSONDecoder().decode(BrainSettings.self, from: data), settings)
     }
@@ -27,11 +27,10 @@ final class BrainSettingsTests: XCTestCase {
     func testServiceConfigurationCarriesEveryOption() {
         let settings = BrainSettings(
             runtime: .claude, workspacePath: "/w", assistantName: "Jarvis", nodePath: "/n",
-            codex: .init(executablePath: "/c"), claude: .init(executablePath: "/cl"), hermes: .init(url: "http://h"))
+            codex: .init(executablePath: "/c"), claude: .init(executablePath: "/cl"), hermes: .init(url: "http://h"),
         XCTAssertEqual(
             settings.serviceConfiguration(stateDirectory: "/state", port: 8791),
             BrainServiceConfiguration(runtime: .claude, workingDirectory: "/w", stateDirectory: "/state", port: 8791,
-                                      nodePath: "/n", codexPath: "/c", claudePath: "/cl", hermesURL: "http://h",
-                                      assistantName: "Jarvis"))
+                                      hermesURL: "http://h", assistantName: "Jarvis"))
     }
 }

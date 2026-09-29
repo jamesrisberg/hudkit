@@ -95,6 +95,8 @@ public struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     /// The runtime id; a snapshot without one comes from a companion running Codex.
     public var runtime: String?
     public var capabilities: AgentCapabilities?
+    /// nil for runtimes without one.
+    public var sessionKey: String?
 
     public var runtimeName: String {
         AgentRuntime(rawValue: runtime ?? AgentRuntime.codex.rawValue)?.displayName ?? (runtime ?? "Agent")

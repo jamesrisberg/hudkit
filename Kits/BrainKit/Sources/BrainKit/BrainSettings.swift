@@ -31,6 +31,16 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         }
     }
 
+        public var executablePath: String
+
+        public init(executablePath: String = "") { self.executablePath = executablePath }
+
+        public init(from decoder: Decoder) throws {
+            let values = try decoder.container(keyedBy: CodingKeys.self)
+            executablePath = try values.decodeIfPresent(String.self, forKey: .executablePath) ?? ""
+        }
+    }
+
     public struct HermesOptions: Codable, Equatable, Sendable {
         /// The `hermes gateway` API server; empty uses the port in `~/.hermes/.env`.
         public var url: String
@@ -57,7 +67,7 @@ public struct BrainSettings: Codable, Equatable, Sendable {
 
     public init(runtime: AgentRuntime = .codex, workspacePath: String = "", assistantName: String = "",
                 nodePath: String = "", codex: CodexOptions = CodexOptions(),
-                claude: ClaudeOptions = ClaudeOptions(), hermes: HermesOptions = HermesOptions()) {
+                claude: ClaudeOptions = ClaudeOptions(), hermes: HermesOptions = HermesOptions(),
         self.runtime = runtime
         self.workspacePath = workspacePath
         self.assistantName = assistantName
@@ -68,7 +78,6 @@ public struct BrainSettings: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case runtime, workspacePath, assistantName, nodePath, codex, claude, hermes
     }
 
     public init(from decoder: Decoder) throws {
@@ -89,6 +98,5 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         BrainServiceConfiguration(
             runtime: runtime, workingDirectory: workspacePath, stateDirectory: stateDirectory, port: port,
             nodePath: nodePath, codexPath: codex.executablePath, claudePath: claude.executablePath,
-            hermesURL: hermes.url, assistantName: assistantName)
     }
 }

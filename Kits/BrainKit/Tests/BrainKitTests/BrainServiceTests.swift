@@ -94,6 +94,13 @@ final class BrainServiceTests: XCTestCase {
         ])
     }
 
+        let service = make()
+        let arguments = try XCTUnwrap(launcher.specs.last?.arguments)
+        let other = make()
+        other.configure(custom)
+        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(4)),
+    }
+
     func testRuntimeOnlyChangeKeepsTheProcessAndOtherChangesRestart() {
         let service = make()
         service.configure(configuration(.codex))

@@ -10,7 +10,7 @@ manual mode. Audio stays in the host app's local speech pipeline; this service
 accepts only text. The runtime sends that text and relevant tool context to its
 configured model provider and keeps its own conversation history on disk.
 
-Three runtimes are built in:
+Four runtimes are built in:
 
 | `--runtime` | Agent | Transport | Folder scope | Approvals | Cancel |
 |---|---|---|---|---|---|
@@ -38,7 +38,7 @@ Flags:
   by the app) is read from the state directory; the first default is `codex`.
 - `--state-dir /absolute/path` — private state (default `~/.brainkit-companion`).
 - `--port 8789` — HTTP port on 127.0.0.1 (default 8788).
-- `--codex /path/to/codex`, `--claude /path/to/claude` — executables if not on PATH
+  executables if not on PATH
   (Homebrew Codex: `--codex /opt/homebrew/bin/codex`).
 - `--runtime-url http://127.0.0.1:8642` — Hermes API server. Plain HTTP only on
   loopback; https elsewhere. Persisted in the state directory.
@@ -171,16 +171,18 @@ persistence, opaque approval IDs, timing, the snapshot — and talks to one runt
 | `setPermissions(permissions)` | apply the validated scope from the next turn at the latest |
 | `cancel(turnId)` | request interruption; confirmation arrives as an event |
 | `reset({ permissions })` → `{ threadId }` | new conversation (idle only) |
-| `snapshot()` → `{ routing }` | runtime-specific snapshot fields |
+| `snapshot()` → `{ routing, sessionKey }` | runtime-specific snapshot fields; `sessionKey` names an external session, or null |
 | `persistentState()` | extra JSON saved in the state directory, returned as `saved` |
 | `capabilities` | `{ approvals, folderScope, modelRouting, cancel }` |
 | `close()` | release processes and connections |
 
 Events: `started {turnId}`, `output {turnId, text}` (the full visible text so far),
 `progress {turnId, text}`, `approval {id, turnId, kind, reason, command, cwd}`,
-`completed|failed|cancelled {turnId, output, error}`, `notice {error}`, and
-`disconnected Error`. A runtime refuses requests it cannot represent (fail closed)
-and declines its own pending approvals when a turn ends.
+`approvalResolved {id}` (answered in another client), `completed|failed|cancelled
+{turnId, output, error}`, `notice {error}`, and `disconnected Error`. `started` while
+idle is a turn another client of the same session began; it carries no request ID. A
+runtime refuses requests it cannot represent (fail closed) and declines its own pending
+approvals when a turn ends.
 
 ### Adding a runtime
 
@@ -227,7 +229,6 @@ polls complete snapshots so missed polls do not lose approvals.
 - `POST /v1/cancel` with `{}` — request interruption; subsequent snapshots confirm it.
   Returns 409 if the runtime cannot interrupt.
 - `POST /v1/session/reset` with `{}` — start a new conversation while idle.
-- `POST /v1/runtime` with `{ "runtime": "codex" | "hermes" | "claude" }` — switch
   runtime while idle (409 otherwise), or restart the current one after a failure.
   Only the name crosses HTTP; executables, URLs and tokens come from the command
   line. Permissions and recent request IDs carry over; each runtime's conversation
@@ -237,8 +238,8 @@ polls complete snapshots so missed polls do not lose approvals.
 Snapshots contain `threadId`, `turnId`, `status`, `output`, `progress`, `approvals`,
 `error`, increasing `revision`, a process-specific `instanceId`, optional
 `requestId`, `route`, `timing`, `permissions` (mode and approved folders),
-`routing`, then `runtime` (the runtime ID) and `capabilities`
-(`approvals`, `folderScope`, `modelRouting`, `cancel`). The fields before `runtime`
+`routing`, then `runtime` (the runtime ID), `capabilities`
+(`approvals`, `folderScope`, `modelRouting`, `cancel`) and `sessionKey` (the external
 keep a fixed order and encoding, and new fields are only appended after them
 (`test/snapshot-compat.test.mjs`).
 Status is `idle`, `running`, `approval`, `interrupted`, or `failed`. `idle` with a
