@@ -8,6 +8,7 @@
 //   submit "fail ..."     reports an API error and ends without an answer
 //   submit "/clear"       switches to a new session id
 // FAKE_MCLAUDE_GATED=1 starts behind the folder-trust overlay.
+// FAKE_MCLAUDE_SIDECAR_DELAY_MS writes the sidecar that much later, like a slow tmux start.
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
@@ -148,8 +149,8 @@ const server = net.createServer(client => {
 const cleanup = () => { try { unlinkSync(sock); } catch {} try { unlinkSync(metaPath); } catch {} };
 process.on('SIGTERM', () => { cleanup(); process.exit(0); });
 process.on('SIGINT', () => { cleanup(); process.exit(0); });
-server.listen(sock, () => {
+server.listen(sock, () => setTimeout(() => {
   writeFileSync(metaPath, JSON.stringify({ pid: process.pid, sessionId, cwd: config.cwd, argv: config.args, startedAt: Date.now(), version: '2.1.284', spawnTag: config.tag, sock }));
-});
+}, Number(process.env.FAKE_MCLAUDE_SIDECAR_DELAY_MS ?? 0)));
 // Never outlive a test run by long.
 setTimeout(() => { cleanup(); process.exit(0); }, 60000).unref?.();

@@ -5,7 +5,7 @@ import { bounded } from './runtimes/Runtime.mjs';
 import { voiceInstructions } from './voice-instructions.mjs';
 
 const ACTIVE = ['running', 'approval'];
-const RUNTIME_EVENTS = ['started', 'output', 'progress', 'approval', 'approvalResolved', 'completed', 'failed', 'cancelled', 'notice', 'disconnected'];
+const RUNTIME_EVENTS = ['started', 'output', 'progress', 'approval', 'approvalResolved', 'completed', 'failed', 'cancelled', 'notice', 'disconnected', 'persist'];
 
 /**
  * Runtime-agnostic conversation state behind the HTTP API. Everything the app relies
@@ -74,6 +74,11 @@ export class Session {
       cancelled: event => this.onTurnEnd(event, 'interrupted'),
       failed: event => this.onTurnEnd(event, 'failed'),
       notice: ({ error }) => this.update({ error: bounded(error || 'Agent error') }),
+      persist: () => {
+        // Before start() returns, persist() writes what was saved for the runtime; keep that current.
+        if (!this.started) this.runtimeSaved = { ...this.runtimeSaved, ...runtime.persistentState() };
+        this.persist().catch(error => this.update({ error: bounded(`Unable to save session state: ${error.message}`) }));
+      },
       disconnected: error => {
         this.ready = false; this.approvals.clear();
         this.update({ status: 'failed', error: bounded(error?.message ?? error), approvals: [], progress: 'Runtime disconnected' });
