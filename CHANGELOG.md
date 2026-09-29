@@ -7,6 +7,10 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Fixed
+- `hud-release.sh` builds through the repo's `build.sh`, so a release carries the helpers it
+  names in `HUD_HELPERS` (MacHUD's voice host and MCP server), and stops when one is missing.
+
 ## [0.2.0] - 2026-09-29
 
 ### Added

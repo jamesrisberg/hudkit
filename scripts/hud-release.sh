@@ -7,7 +7,7 @@
 #   1. version: VERSION, or the argument (written to VERSION and committed "<Product> <v>")
 #   2. build: a clean copy of HEAD (a detached worktree; sibling path packages exported at the
 #      branch their checkout tracks, else origin/main; HUDKit and its Kits at HUDKIT_REF) built
-#      by hud-build.sh, signed with the Developer ID identity, hardened runtime, --timestamp,
+#      by the repo's build.sh (else hud-build.sh directly), signed with the Developer ID identity, hardened runtime, --timestamp,
 #      <Product>.entitlements when present
 #   3. zip: ditto -c -k --keepParent (without extended attributes, so no ._ files in the zip)
 #   4. notarize: xcrun notarytool submit --wait; on rejection print the log summary and stop
@@ -296,8 +296,18 @@ stage_deps "$STAGED_WT"
 say "Built against: ${(j:, :)BUILT_WITH}"
 
 say "Building and signing with $IDENTITY"
-APP="$(cd "$STAGED_WT" && HUD_NO_ANNOUNCE=1 HUD_SIGN_IDENTITY="$IDENTITY" "$HERE/hud-build.sh" "$PRODUCT" release | tail -1)"
+# Through the repo's build.sh when it has one, so its build settings (MacHUD's HUD_HELPERS)
+# apply, with this HUDKit's scripts.
+if [[ -x "$STAGED_WT/build.sh" ]]; then
+  APP="$(cd "$STAGED_WT" && HUD_NO_ANNOUNCE=1 HUD_SIGN_IDENTITY="$IDENTITY" HUDKIT_DIR="$HUDKIT_DIR" ./build.sh release | tail -1)"
+else
+  APP="$(cd "$STAGED_WT" && HUD_NO_ANNOUNCE=1 HUD_SIGN_IDENTITY="$IDENTITY" "$HERE/hud-build.sh" "$PRODUCT" release | tail -1)"
+fi
 [[ -d "$APP" ]] || die "build did not produce an app"
+# Every helper the repo's build.sh names must be in the bundle.
+for helper in ${=${"$(grep -oE 'HUD_HELPERS="[^"]*"' "$STAGED_WT/build.sh" 2>/dev/null | head -1)"#HUD_HELPERS=}//\"/}; do
+  [[ -x "$APP/Contents/Helpers/$helper" ]] || die "the app has no Contents/Helpers/$helper"
+done
 if /usr/libexec/PlistBuddy -c "Print :SUFeedURL" "$APP/Contents/Info.plist" >/dev/null 2>&1; then
   die "Info.plist has Sparkle keys; MacHUD apps update through the catalog (CONVENTIONS, Releasing)"
 fi
