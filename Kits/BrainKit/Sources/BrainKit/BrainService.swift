@@ -16,7 +16,6 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
     public var port: Int
     /// `node` override; empty finds Node.js on PATH and the common install folders.
     public var nodePath: String
-    /// `codex` and `claude` overrides; empty finds them the same way.
     public var codexPath: String
     public var claudePath: String
     /// Hermes API server (`--runtime-url`); empty lets the companion read `~/.hermes/.env`.
@@ -26,7 +25,6 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
 
     public init(runtime: AgentRuntime, workingDirectory: String, stateDirectory: String, port: Int,
                 nodePath: String = "", codexPath: String = "", claudePath: String = "",
-                hermesURL: String = "", assistantName: String = "") {
         self.runtime = runtime
         self.workingDirectory = workingDirectory
         self.stateDirectory = stateDirectory

@@ -120,6 +120,7 @@ public enum BrainCatalog {
             loginCommand: "claude", loginTitle: "Log In",
             docsURL: URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!),
         Entry(
+        Entry(
             runtime: .codex, executable: "codex",
             summary: "OpenAI's Codex CLI. Uses your ChatGPT account or API key.",
             installCommand: "brew install --cask codex || npm install -g @openai/codex",

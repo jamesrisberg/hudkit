@@ -162,6 +162,11 @@ final class AgentSessionClientTests: XCTestCase {
         client.disconnect()
     }
 
+    func testSnapshotsCarryTheExternalSessionKey() throws {
+        let none = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base + #","sessionKey":null}"#).utf8))
+        XCTAssertNil(none.sessionKey)
+    }
+
     func testServerErrorsCarryStatusAndMessage() async {
         let client = client(ConflictProtocol.self)
         do {
