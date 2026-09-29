@@ -97,6 +97,9 @@ public struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     public var capabilities: AgentCapabilities?
     /// nil for runtimes without one.
     public var sessionKey: String?
+    /// The host's tool servers and whether this runtime gives them to the agent; nil from a
+    /// companion that predates them.
+    public var toolServers: AgentToolServerStatus?
 
     public var runtimeName: String {
         AgentRuntime(rawValue: runtime ?? AgentRuntime.codex.rawValue)?.displayName ?? (runtime ?? "Agent")
