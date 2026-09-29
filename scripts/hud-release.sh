@@ -5,9 +5,10 @@
 # Releases the MacHUD app repo in the current directory, following docs/CONVENTIONS.md
 # ("Releasing"):
 #   1. version: VERSION, or the argument (written to VERSION and committed "<Product> <v>")
-#   2. build: a clean copy of HEAD (a detached worktree; sibling path packages exported at
-#      their origin/main, HUDKit at HUDKIT_REF) built by hud-build.sh, signed with the Developer ID
-#      identity, hardened runtime, --timestamp, <Product>.entitlements when present
+#   2. build: a clean copy of HEAD (a detached worktree; sibling path packages exported at the
+#      branch their checkout tracks, else origin/main; HUDKit and its Kits at HUDKIT_REF) built
+#      by hud-build.sh, signed with the Developer ID identity, hardened runtime, --timestamp,
+#      <Product>.entitlements when present
 #   3. zip: ditto -c -k --keepParent (without extended attributes, so no ._ files in the zip)
 #   4. notarize: xcrun notarytool submit --wait; on rejection print the log summary and stop
 #   5. staple, spctl -a -vv -t install, rezip, sha256, and check the zip unpacks to a valid app
@@ -35,7 +36,8 @@
 #   HUD_RELEASE_IDENTITY    signing identity (default: the "Developer ID Application" identity
 #                           of APPLE_TEAM_ID in the keychain)
 #   HUDKIT_REF              HUDKit ref to build against (default: HUDKit's newest v* tag)
-#   HUD_DEP_REF             ref of the other sibling path packages (default: origin/main)
+#   HUD_DEP_REF             ref of the other sibling path packages (default: the upstream of the
+#                           branch each checkout is on, else origin/main)
 #   HUD_RELEASE_NO_CATALOG  set to skip the catalog update
 #   HUD_COMMIT_TRAILER      a line appended to commit messages the script makes
 #   MACHUD_DIR              the machud checkout, for the catalog (see hud-catalog.sh)
@@ -263,21 +265,31 @@ HUDKIT_REF="${HUDKIT_REF:-$(git -C "$HUDKIT_DIR" tag --list 'v[0-9]*' --sort=-v:
 [[ -n "$HUDKIT_REF" ]] || die "HUDKit has no v* tag; set HUDKIT_REF"
 typeset -A staged
 BUILT_WITH=()
-stage_deps() { # stage_deps <package dir>: export each ../<dep> path package into $STAGE
-  local dir="$1" dep src ref
+dep_ref() { # dep_ref <repo> <checkout>: the ref a sibling repo is built at
+  local repo="$1" src="$2" upstream
+  if [[ "$repo" == hudkit ]]; then print -r -- "$HUDKIT_REF"; return; fi
+  if [[ -n "${HUD_DEP_REF-}" ]]; then print -r -- "$HUD_DEP_REF"; return; fi
+  # The pushed state of the branch the checkout builds from (a fork's integration branch,
+  # say), else origin/main.
+  upstream="$(git -C "$src" rev-parse -q --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || upstream=""
+  print -r -- "${upstream:-origin/main}"
+}
+stage_deps() { # stage_deps <package dir>: export the repo of each ../<repo>[/<sub>] path package into $STAGE
+  local dir="$1" dep repo src ref
   for dep in ${(f)"$(grep -oE '\.package\(path: *"\.\./[^"]+"' "$dir/Package.swift" | sed -E 's#.*"\.\./([^"]+)"#\1#')"}; do
-    [[ -n "$dep" && -z "${staged[$dep]-}" ]] || continue
-    src="${PWD:h}/$dep"
-    [[ "$dep" == hudkit ]] && src="$HUDKIT_DIR"
-    [[ -d "$src" ]] || die "missing path dependency ../$dep"
-    ref="${HUD_DEP_REF:-origin/main}"; [[ "$dep" == hudkit ]] && ref="$HUDKIT_REF"
-    git -C "$src" rev-parse -q --verify "$ref^{commit}" >/dev/null || die "../$dep has no $ref"
-    mkdir -p "$STAGE/$dep"
-    git -C "$src" archive "$ref" | tar -x -C "$STAGE/$dep"
-    staged[$dep]="$ref"
-    if [[ "$ref" == v* ]]; then BUILT_WITH+=("$dep $ref")
-    else BUILT_WITH+=("$dep $(git -C "$src" rev-parse --short "$ref")"); fi
-    stage_deps "$STAGE/$dep"
+    repo="${dep%%/*}"
+    [[ -n "$repo" && -z "${staged[$repo]-}" ]] || continue
+    src="${PWD:h}/$repo"
+    [[ "$repo" == hudkit ]] && src="$HUDKIT_DIR"
+    [[ -d "$src" ]] || die "missing path dependency ../$repo"
+    ref="$(dep_ref "$repo" "$src")"
+    git -C "$src" rev-parse -q --verify "$ref^{commit}" >/dev/null || die "../$repo has no $ref"
+    mkdir -p "$STAGE/$repo"
+    git -C "$src" archive "$ref" | tar -x -C "$STAGE/$repo"
+    staged[$repo]="$ref"
+    if [[ "$ref" == v* ]]; then BUILT_WITH+=("$repo $ref")
+    else BUILT_WITH+=("$repo $ref $(git -C "$src" rev-parse --short "$ref")"); fi
+    stage_deps "$STAGE/$repo"
   done
 }
 stage_deps "$STAGED_WT"
