@@ -315,7 +315,7 @@ codesign --verify --strict --deep "$APP" || die "codesign --verify failed"
 sig="$(codesign -dv --verbose=2 "$APP" 2>&1)"
 [[ "$sig" == *"flags=0x10000(runtime)"* ]] || die "hardened runtime is not on"
 [[ "$sig" == *"Timestamp="* ]] || die "the signature has no secure timestamp"
-for helper in "$APP"/Contents/Helpers/*(N); do
+for helper in "$APP"/Contents/Helpers/*(N.x); do  # executables, not the resource-bundle links
   [[ "$(codesign -dv "$helper" 2>&1)" == *"Timestamp="* ]] || die "${helper:t}: no secure timestamp"
 done
 
