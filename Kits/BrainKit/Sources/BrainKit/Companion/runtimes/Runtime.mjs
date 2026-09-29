@@ -41,8 +41,9 @@ import { EventEmitter } from 'node:events';
  *   reset({ permissions }) -> Promise<{ threadId }>
  *     Start a new conversation. Only called while idle.
  *
- *   snapshot() -> { routing, route }
- *     Runtime-specific snapshot fields (see Session.snapshot()).
+ *   snapshot() -> { routing, route, sessionKey? }
+ *     Runtime-specific snapshot fields (see Session.snapshot()). `sessionKey` names an
+ *     external session the runtime drives (mechaclaude's `claude:<sessionId>`), or null.
  *
  *   persistentState() -> object
  *     Extra JSON persisted in the state directory and passed back as `saved`.
@@ -52,12 +53,15 @@ import { EventEmitter } from 'node:events';
  *
  * Events (emit with exactly these names; 'error' is reserved by EventEmitter):
  *
- *   'started'      { turnId }                   the runtime assigned/confirmed a turn ID
+ *   'started'      { turnId }                   the runtime assigned/confirmed a turn ID; emitted
+ *                                               while idle, it is a turn another client of the
+ *                                               same session started (no request ID)
  *   'output'       { turnId, text }             the full visible answer text so far
  *   'progress'     { turnId, text }             short human-readable activity line
  *   'approval'     { id, turnId, kind, reason, command, cwd }
  *                  kind is 'command' | 'fileChange' | 'tool'. The runtime must have
  *                  already refused requests it cannot represent (fail closed).
+ *   'approvalResolved' { id }                  an approval it emitted was answered elsewhere
  *   'completed'    { turnId, output }           turn finished normally
  *   'failed'       { turnId, output, error }    turn ended with an error
  *   'cancelled'    { turnId, output }           turn was interrupted
@@ -91,7 +95,7 @@ export class Runtime extends EventEmitter {
   async setPermissions(_permissions) {}
   async cancel(_turnId) { throw Object.assign(new Error(`${this.displayName} runtime cannot interrupt a turn`), { status: 409 }); }
   async reset(_options) { throw new Error(`${this.displayName} runtime does not implement reset`); }
-  snapshot() { return { routing: { mode: 'automatic', available: false, fastModel: null, deepModel: null }, route: null }; }
+  snapshot() { return { routing: { mode: 'automatic', available: false, fastModel: null, deepModel: null }, route: null, sessionKey: null }; }
   persistentState() { return {}; }
   close() {}
 }

@@ -72,6 +72,10 @@ final class ExecutableLocatorTests: XCTestCase {
         XCTAssertEqual(codex.executable, "/opt/homebrew/bin/codex")
         let noEnv = BrainCatalog.detect(.hermes, locator: locator, readFile: { _ in nil })
         XCTAssertEqual(noEnv.apiServerEnabled, false)
+        XCTAssertFalse(BrainCatalog.detect(.mclaude, locator: locator).isInstalled)
+        let withMclaude = self.locator(files: ["/Users/test/.local/bin/mclaude"])
+        XCTAssertEqual(BrainCatalog.detect(.mclaude, locator: withMclaude).executable, "/Users/test/.local/bin/mclaude")
+        XCTAssertEqual(BrainCatalog.entry(for: .mclaude).executable, "mclaude")
     }
 
     func testHermesEnvParsing() {

@@ -80,10 +80,10 @@ export function createServer({ session, token }) {
     } catch (error) { json(response, error.status ?? 503, { error: String(error.message).slice(0, 2048) }); }
   });
 }
-const USAGE = 'Usage: node server.mjs --cwd /absolute/workspace [--runtime codex|hermes|claude] [--state-dir /path] [--port 8788]\n' +
-  '  [--codex /path/to/codex] [--claude /path/to/claude] [--runtime-url http://127.0.0.1:8642] [--runtime-token TOKEN | --runtime-token-file /path]\n' +
+const USAGE = 'Usage: node server.mjs --cwd /absolute/workspace [--runtime codex|hermes|claude|mclaude] [--state-dir /path] [--port 8788]\n' +
+  '  [--codex /path/to/codex] [--claude /path/to/claude] [--mclaude /path/to/mclaude] [--runtime-url http://127.0.0.1:8642] [--runtime-token TOKEN | --runtime-token-file /path]\n' +
   '  [--assistant-name NAME]';
-const FLAGS = ['--cwd', '--state-dir', '--codex', '--claude', '--port', '--runtime', '--runtime-url', '--runtime-token', '--runtime-token-file', '--assistant-name'];
+const FLAGS = ['--cwd', '--state-dir', '--codex', '--claude', '--mclaude', '--port', '--runtime', '--runtime-url', '--runtime-token', '--runtime-token-file', '--assistant-name'];
 export function parseArguments(args) {
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
@@ -111,7 +111,7 @@ async function main() {
   const runtimeToken = options['--runtime-token-file'] ? (await privateRead(path.resolve(options['--runtime-token-file']))).trim() : options['--runtime-token'] ?? process.env.BRAINKIT_RUNTIME_TOKEN;
   // The explicit flag wins; otherwise the choice last made (flag or app) persists in the state directory.
   const runtimeName = options['--runtime'] ?? (RUNTIME_IDS.includes(saved.runtime) ? saved.runtime : 'codex');
-  const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], runtimeUrl: options['--runtime-url'], runtimeToken };
+  const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], mclaude: options['--mclaude'], runtimeUrl: options['--runtime-url'], runtimeToken };
   const build = name => createRuntime(name, runtimeOptions);
   const session = new Session({ runtime: build(runtimeName), cwd, saved, createRuntime: build, instructions: voiceInstructions(options['--assistant-name']), save: state => saveState(directory, { ...state, cwd }) });
   const server = createServer({ session, token });

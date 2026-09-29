@@ -162,6 +162,15 @@ final class AgentSessionClientTests: XCTestCase {
         client.disconnect()
     }
 
+    func testSnapshotsCarryTheExternalSessionKey() throws {
+        let base = #"{"status":"idle","output":"","progress":"Ready","approvals":[],"revision":1,"runtime":"mclaude""#
+        let mclaude = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base + #","sessionKey":"claude:abc"}"#).utf8))
+        XCTAssertEqual(mclaude.sessionKey, "claude:abc")
+        XCTAssertEqual(mclaude.runtimeName, "mclaude")
+        let none = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base + #","sessionKey":null}"#).utf8))
+        XCTAssertNil(none.sessionKey)
+    }
+
     func testServerErrorsCarryStatusAndMessage() async {
         let client = client(ConflictProtocol.self)
         do {

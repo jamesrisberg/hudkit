@@ -5,7 +5,7 @@ import { bounded } from './runtimes/Runtime.mjs';
 import { voiceInstructions } from './voice-instructions.mjs';
 
 const ACTIVE = ['running', 'approval'];
-const RUNTIME_EVENTS = ['started', 'output', 'progress', 'approval', 'completed', 'failed', 'cancelled', 'notice', 'disconnected'];
+const RUNTIME_EVENTS = ['started', 'output', 'progress', 'approval', 'approvalResolved', 'completed', 'failed', 'cancelled', 'notice', 'disconnected'];
 
 /**
  * Runtime-agnostic conversation state behind the HTTP API. Everything the app relies
@@ -40,15 +40,25 @@ export class Session {
   }
   update(fields) { Object.assign(this.state, fields); this.state.revision++; }
   snapshot() {
-    return structuredClone({ ...this.state, permissions: this.permissions, routing: this.runtime.snapshot().routing,
-      runtime: this.runtime.id, capabilities: this.runtime.capabilities });
+    const runtime = this.runtime.snapshot();
+    return structuredClone({ ...this.state, permissions: this.permissions, routing: runtime.routing,
+      runtime: this.runtime.id, capabilities: this.runtime.capabilities, sessionKey: runtime.sessionKey ?? null });
   }
   bind(runtime) {
     const handlers = {
-      started: ({ turnId }) => { this.correlate(turnId); this.update({ turnId, status: 'running' }); },
+      started: ({ turnId }) => {
+        // A turn nobody submitted here was started in another client of the same session
+        // (mclaude in MechaHUD): it belongs to no request and replaces the last answer.
+        if (!this.busy && !ACTIVE.includes(this.state.status)) {
+          this.approvals.clear();
+          return this.update({ turnId, status: 'running', requestId: null, route: null, timing: null, output: '', error: null, approvals: [], progress: 'Working' });
+        }
+        this.correlate(turnId); this.update({ turnId, status: 'running' });
+      },
       output: ({ text }) => { this.markFirstResponse(); this.update({ output: bounded(text, 65536) }); },
       progress: ({ text }) => this.update({ progress: bounded(text, 1024) }),
       approval: request => this.onApproval(request),
+      approvalResolved: ({ id }) => this.onApprovalResolved(id),
       completed: event => this.onTurnEnd(event, 'idle'),
       cancelled: event => this.onTurnEnd(event, 'interrupted'),
       failed: event => this.onTurnEnd(event, 'failed'),
@@ -133,6 +143,14 @@ export class Session {
     }
     const id = randomUUID(); this.approvals.set(id, { runtimeId: request.id, turnId: request.turnId ?? this.state.turnId });
     this.update({ status: 'approval', approvals: [...this.state.approvals, { id, kind: request.kind, reason: bounded(request.reason || 'Permission requested'), command: request.command ? bounded(request.command) : null, cwd: request.cwd ? bounded(request.cwd) : null }], progress: 'Waiting for your approval' });
+  }
+  /** The runtime withdrew an approval (answered in another client of the same session). */
+  onApprovalResolved(runtimeId) {
+    const entry = [...this.approvals].find(([, value]) => value.runtimeId === runtimeId);
+    if (!entry) return;
+    this.approvals.delete(entry[0]);
+    const approvals = this.state.approvals.filter(item => item.id !== entry[0]);
+    this.update({ approvals, status: approvals.length ? 'approval' : 'running', progress: approvals.length ? 'Waiting for your approval' : 'Answered elsewhere' });
   }
   onTurnEnd({ turnId, output = '', error = null }, status) {
     if (this.state.turnId && turnId !== this.state.turnId) return;

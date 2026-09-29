@@ -94,6 +94,22 @@ final class BrainServiceTests: XCTestCase {
         ])
     }
 
+    func testMclaudeIsPassedWhenFoundOrOverridden() throws {
+        files.insert("/Users/test/.local/bin/mclaude")
+        let service = make()
+        service.configure(configuration(.mclaude))
+        let arguments = try XCTUnwrap(launcher.specs.last?.arguments)
+        XCTAssertEqual(Array(arguments.suffix(4)), ["--mclaude", "/Users/test/.local/bin/mclaude", "--runtime", "mclaude"])
+        XCTAssertEqual(service.detections[.mclaude]?.executable, "/Users/test/.local/bin/mclaude")
+        var custom = configuration(.mclaude)
+        custom.mclaudePath = "/custom/mclaude"
+        files.insert("/custom/mclaude")
+        let other = make()
+        other.configure(custom)
+        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(4)),
+                       ["--mclaude", "/custom/mclaude", "--runtime", "mclaude"])
+    }
+
     func testRuntimeOnlyChangeKeepsTheProcessAndOtherChangesRestart() {
         let service = make()
         service.configure(configuration(.codex))

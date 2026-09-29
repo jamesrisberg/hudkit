@@ -6,7 +6,8 @@ final class BrainSettingsTests: XCTestCase {
         let settings = BrainSettings(
             runtime: .hermes, workspacePath: "/Users/test/Assistant", assistantName: "Jarvis",
             nodePath: "/opt/homebrew/bin/node", codex: .init(executablePath: "/opt/homebrew/bin/codex"),
-            claude: .init(executablePath: "~/.local/bin/claude"), hermes: .init(url: "http://127.0.0.1:8642"))
+            claude: .init(executablePath: "~/.local/bin/claude"), hermes: .init(url: "http://127.0.0.1:8642"),
+            mclaude: .init(executablePath: "~/.local/bin/mclaude"))
         let data = try JSONEncoder().encode(settings)
         XCTAssertEqual(try JSONDecoder().decode(BrainSettings.self, from: data), settings)
     }
@@ -22,16 +23,21 @@ final class BrainSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.codex, .init())
         XCTAssertEqual(decoded.hermes.url, "http://127.0.0.1:1")
         XCTAssertEqual(decoded.claude, .init())
+        XCTAssertEqual(decoded.mclaude, .init())
+        let mclaude = try JSONDecoder().decode(BrainSettings.self, from: Data(#"{"runtime":"mclaude","mclaude":{"executablePath":"/m"}}"#.utf8))
+        XCTAssertEqual(mclaude.runtime, .mclaude)
+        XCTAssertEqual(mclaude.mclaude.executablePath, "/m")
     }
 
     func testServiceConfigurationCarriesEveryOption() {
         let settings = BrainSettings(
             runtime: .claude, workspacePath: "/w", assistantName: "Jarvis", nodePath: "/n",
-            codex: .init(executablePath: "/c"), claude: .init(executablePath: "/cl"), hermes: .init(url: "http://h"))
+            codex: .init(executablePath: "/c"), claude: .init(executablePath: "/cl"), hermes: .init(url: "http://h"),
+            mclaude: .init(executablePath: "/m"))
         XCTAssertEqual(
             settings.serviceConfiguration(stateDirectory: "/state", port: 8791),
             BrainServiceConfiguration(runtime: .claude, workingDirectory: "/w", stateDirectory: "/state", port: 8791,
-                                      nodePath: "/n", codexPath: "/c", claudePath: "/cl", hermesURL: "http://h",
-                                      assistantName: "Jarvis"))
+                                      nodePath: "/n", codexPath: "/c", claudePath: "/cl", mclaudePath: "/m",
+                                      hermesURL: "http://h", assistantName: "Jarvis"))
     }
 }
