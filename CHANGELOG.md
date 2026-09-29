@@ -27,6 +27,10 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   name=open-session id=<sessionKey>` and a `sessions` command, so a client can ask "who shows
   agent sessions" instead of naming an app. `HUDAgentSessions` and `HUDAgentSession` (see
   `docs/CONTRACT.md` § Agent sessions).
+- `text-feed` manifest capability: a panel that keeps a history of finished text answers a `feed
+  action=add text= source= [title=] [date=]` command, so a client can send it text (a dictation
+  transcript, an agent reply, ...) without naming an app or writing to the clipboard.
+  `HUDTextFeed` (see `docs/CONTRACT.md` § Text feed).
 
 **BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
 - A local agent brain for any app: Codex, Claude Code, Hermes or mclaude (a mechaclaude session)

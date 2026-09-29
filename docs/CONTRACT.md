@@ -19,7 +19,7 @@ family app; **may** is optional.
 Contents: [Versioning](#versioning) · [Manifest](#manifest) · [Socket](#socket) ·
 [Verbs](#verbs) · [subscribe](#subscribe-and-state-events) · [Settings schema](#settings-schema) ·
 [docks.json](#docksjson) · [Behaviour](#behaviour-hover-and-windowed) · [File drops](#file-drops) ·
-[Agent sessions](#agent-sessions) ·
+[Agent sessions](#agent-sessions) · [Text feed](#text-feed) ·
 [Launch announcement](#launch-announcement) · [Menu bar consolidation](#menu-bar-consolidation) ·
 [What MacHUD guarantees](#what-machud-guarantees) · [Compliance checklist](#compliance-checklist)
 
@@ -84,7 +84,7 @@ copies it into the bundle.
 | `order` | integer | no | none | Sort key within its `kind` group on the dock, ascending; panels without one come after those with one, in manifest order (`HUDManifest.dockSorted`). A non-integer is ignored. Family hover apps use 1-5; the template uses 90. |
 | `defaultSize` | `[width, height]` | no | none | Points. MacHUD uses it the first time it places or hover-shows the panel (else 420x480). |
 | `compactSize` | `[width, height]` | no | none | Size in `compact` mode, informational. |
-| `capabilities` | array of string | no | `[]` | Known values: `acceptsFileDrop` (see [File drops](#file-drops)) and `agent-sessions` (see [Agent sessions](#agent-sessions)). Unknown values are carried but ignored (Scratch lists `acceptsTextDrop`, which MacHUD does not use). |
+| `capabilities` | array of string | no | `[]` | Known values: `acceptsFileDrop` (see [File drops](#file-drops)), `agent-sessions` (see [Agent sessions](#agent-sessions)) and `text-feed` (see [Text feed](#text-feed)). Unknown values are carried but ignored (Scratch lists `acceptsTextDrop`, which MacHUD does not use). |
 | `verbs` | array of string | no | `[]` | Informational list of what the panel supports beyond the required commands. **One value has an effect:** MacHUD places the panel with `panel frame` over the socket only when `verbs` is empty or contains `"frame"`; otherwise it moves the window through Accessibility. |
 | `settingsSchema` | string | no | none | Path of a [settings schema](#settings-schema) file relative to `Contents/Resources`. The first panel that names one is the app's schema. |
 
@@ -565,6 +565,23 @@ other apps.
   → forwards `action open-session` to the first running provider (launching an installed one if
   none runs) → `{"ok": true, "app": "<bundle id>"}`, or `{"ok": false, "error": "No app shows
   agent sessions"}` when none is discovered. See MacHUD's `docs/API.md`.
+
+## Text feed
+
+- Opt in per panel with `"capabilities": ["text-feed"]` (`HUDTextFeed.capability`) to accept
+  finished text (a dictation transcript, an agent reply, ...) into the app's own history, from
+  another app or the voice host, without naming this app.
+- The panel's app answers one thing on its own socket, app-specific (not part of the required
+  verbs): `feed` (`HUDTextFeed.command`), a top-level command like `state`. Its only action,
+  `add` (`HUDTextFeed.addAction`, the default when `action` is absent), takes `text=`, `source=`
+  (a short label the item is tagged with, e.g. `"Dictation"`, `"Agent"`), and optional `title=`
+  and `date=`; it stores the item and replies `{"ok": true, "id": <string>}` (or `{"ok": false,
+  "error": ...}`). The app **must not** treat the item as a clipboard write (no re-publishing it
+  to the pasteboard, no clipboard-watcher dedup against it).
+- MacHUD brokers the capability so a client can send fed text without naming an app: `feed add
+  text= source= [title=]` → forwards `feed action=add ...` to every provider whose process is
+  already up (never launching one just to feed it) → `{"ok": true, "delivered": [<bundle id>,
+  ...]}` (the providers that accepted it; `[]` when none run). See MacHUD's `docs/API.md`.
 
 ## Launch announcement
 
