@@ -47,6 +47,10 @@ public final class HUDControlRouter {
     /// which the shared build script fills from the repo's `VERSION` file. Nil outside a bundle.
     public var appVersion: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
 
+    /// The event subscribers receive, once, when the app terminates on purpose (Quit, ⌘Q, the
+    /// `quit` verb): sent as the control server stops, before the process exits, to every
+    /// subscriber whatever its `events` filter. Not sent after a crash.
+    public static let quittingEvent = "quitting"
     public static let requiredVerbs = ["hello", "panel", "state", "subscribe", "settings", "action", "quit"]
     /// Served by every router, but only listed in `hello` when `menuProvider` is set.
     public static let optionalVerbs = ["menu", "menu-invoke"]
@@ -85,6 +89,7 @@ public final class HUDControlRouter {
     /// Registers the contract commands on the server. Commands registered afterwards with the
     /// same names replace these.
     public func install() {
+        server.farewellEvent = Self.quittingEvent
         spaceObserver = spaceObserver ?? NotificationObservation(NotificationCenter.default.addObserver(
             forName: HUDPanelWindow.activeSpaceDidSettleNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.publishState() }

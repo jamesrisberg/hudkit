@@ -19,6 +19,12 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   restores an app's widgets after it relaunches), `edit`, `reveal` and `schema`; the user's
   changes come back as `widget` events. `HUDWidgetContext` gives a widget its instance, size,
   settings and edit state, lets it change its own settings and open its app.
+- `quitting` event (contract 0.3): an app that terminates on purpose (Quit, ⌘Q, the `quit`
+  verb) tells its subscribers once, whatever their `events` filter, before it exits, so MacHUD
+  can tell a quit from a crash. `HUDSocketServer.farewellEvent` (armed by
+  `HUDControlRouter.install()`) and `HUDControlRouter.quittingEvent`.
+- `HUDWidgetContext.configure()`: a widget's own button can ask MacHUD to show the instance's
+  settings, the event the edit-mode settings control reports.
 - `HUDWidgetHost.writeSnapshot(type:size:settings:editing:to:)` renders a widget type to PNG.
 - `HUDPanelWindow.Behavior.widget`, `widgetDesktopLevel`, `widgetCollectionBehavior`.
 - `HUDManifest.dockPanels`, `widgetPanels`; `HUDSettingsSchema.load(widget:manifest:bundleURL:)`.
@@ -39,6 +45,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   panel.
 
 ### Fixed
+- The app template's `--snapshot` serves no control socket, registers no hotkey and adds no
+  menu bar item, so a snapshot cannot take a running app's socket name or announce itself to
+  MacHUD. The compliance checklist and CONVENTIONS state the rule for every app.
 - Hover panels and dock labels appear on the Space the user is on, every time. The window
   server can drop a window's all-Spaces membership while AppKit still reports
   `.canJoinAllSpaces`, which left a panel answering `visible: true` from another desktop; every

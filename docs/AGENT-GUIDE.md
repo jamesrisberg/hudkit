@@ -992,12 +992,15 @@ is [CONTRACT.md § Widgets](CONTRACT.md#widgets). For TallyHUD, a widget showing
    ```
 
    Keep `widgets` in a property. `register(_:keyable: true)` for a widget with a text field;
-   widgets otherwise never take focus or activate the app.
+   widgets otherwise never take focus or activate the app. A button inside a widget ("Set a
+   place") that should open the instance's settings calls `context.configure()`: MacHUD shows
+   the instance's settings, as for the edit-mode gear.
 5. A snapshot of the widget for the `--snapshot` path or a test:
    `try widgets.writeSnapshot(type: "count", size: .medium, to: url)`.
 6. Check it over the isolated socket: `tallyhud widget create instance=a type=count frame=40,40,170,170`,
    `tallyhud widget edit on`, `tallyhud widget list`, `tallyhud widget remove instance=a`, and
-   the widget block of the [compliance checklist](CONTRACT.md#compliance-checklist).
+   the widget block of the [compliance checklist](CONTRACT.md#compliance-checklist). An app
+   with only widgets runs the checklist with `PANEL=` (empty), which skips the panel checks.
 
 The widget needs MacHUD built on HUDKit 0.3 or later; an older MacHUD would offer a widget panel
 as a windowed app.
@@ -1020,6 +1023,12 @@ scale (640x320 for a 320x160 panel on Retina). The snapshot uses the settings in
 picture a particular state. Some apps add flags to pick what to picture (Scratch
 `--snapshot-mode compact`, Sift `--snapshot-mode`, `--drawer`); add your own the same way in
 `AppDelegate`.
+
+A snapshot run never starts the control socket (the template skips `control.start()`, the status
+item and the hotkey when `--snapshot` is given): a plain `--snapshot` with no isolation
+variables would otherwise take the running app's socket name and announce itself to MacHUD. Keep
+it that way when adding setup, and have the snapshot path build its model without reading
+tokens, keychains or other secrets.
 
 ## 7. Isolation: never disturb the user
 
@@ -1173,7 +1182,8 @@ user's MacHUD again. Never set `MACHUD_SOCKET` to `/tmp/machud-$(id -u).sock` (t
 - [ ] `./build.sh debug` succeeds; `build/<Product>.app/Contents/Helpers/<repo>` exists.
 - [ ] `--snapshot` PNG inspected and the UI looks right.
 - [ ] Isolated instance: `hello`, `panel show`, `state`, every action, `panel hide`, and the full
-      compliance checklist all pass; `quit` removes the socket.
+      compliance checklist all pass; `quit` removes the socket. (A widget-only app has no panel to
+      show: it runs the checklist with `PANEL=` and checks its widgets with `widget create`/`list`.)
 - [ ] `machud.json` and `builtinManifest` agree; `kind` matches the window behaviour; `verbs`
       lists the actions and keeps `frame`; `acceptsFileDrop` only with a `drop` handler.
 - [ ] `settings.json` has every key in `AppSettings.keys`, with a `default` and a `help` line.
@@ -1184,7 +1194,7 @@ user's MacHUD again. Never set `MACHUD_SOCKET` to `/tmp/machud-$(id -u).sock` (t
 - [ ] `router.menuProvider` set and `HUDStatusItemPolicy` attached; `<repo> menu` lists the menu.
 - [ ] CLI `--help` lists every shorthand; `docs/CONTRACT.md`, README tables and `CHANGELOG.md`
       describe every verb, setting and flag.
-- [ ] Commits: one logical change each, on `main`, the agent trailer; **not pushed** without the
+- [ ] Commits: one logical change each, on `main`, authored by the user, no co-author trailer; **not pushed** without the
       user's say-so ([CONVENTIONS.md](CONVENTIONS.md#commits)).
 - [ ] Nothing of the user's was quit, installed over, announced to or reconfigured without
       asking; test instances are quit and `/tmp` test directories removed.

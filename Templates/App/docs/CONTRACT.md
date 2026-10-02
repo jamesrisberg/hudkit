@@ -69,4 +69,4 @@ fields.
 
 | Flag | Effect |
 |---|---|
-| `--snapshot <path.png>` | show the panel, write a PNG of it after 1 s, print the path and quit |
+| `--snapshot <path.png>` | show the panel, write a PNG of it after 1 s, print the path and quit; serves no socket, announces nothing, registers no hotkey and adds no menu bar item |
