@@ -41,19 +41,69 @@ public struct HUDManifest: Codable, Equatable, Sendable {
         public var verbs: [String]
         /// Path of a settings schema, relative to `Contents/Resources`.
         public var settingsSchema: String?
-        /// How MacHUD presents the panel in its tool dock: `windowed` panels are placed,
-        /// parked, dismissed and summoned by click; `hover` panels drop down while the
-        /// pointer is over their dock button and go away when it leaves.
+        /// How MacHUD presents the panel: `windowed` panels are placed, parked, dismissed and
+        /// summoned by click; `hover` panels drop down while the pointer is over their dock
+        /// button and go away when it leaves; `widget` panels are widget types MacHUD places on
+        /// the desktop (no dock button; see `widget` and `HUDWidgetHost`).
         public var kind: Kind
         /// Sort key within its `kind` group on the MacHUD dock (ascending; panels without one
         /// come after those with one, in manifest order).
         public var order: Int?
+        /// The widget type's description; set for (and only meaningful on) `kind: widget`
+        /// panels, which always have one (the defaults when the manifest leaves it out).
+        public var widget: HUDWidgetSpec?
 
-        public enum Kind: String, Codable, Sendable { case windowed, hover }
+        /// A panel kind. Decoding never fails on a kind this HUDKit does not know (a newer
+        /// contract's): it is kept verbatim as `unknown`, round-trips, and is never treated as
+        /// windowed or listed among dock panels. A missing or non-string `kind` is `windowed`
+        /// (manifests from before kinds existed).
+        public enum Kind: Hashable, Sendable, Codable, RawRepresentable, CustomStringConvertible {
+            case windowed, hover, widget
+            case unknown(String)
+
+            public init(rawValue: String) {
+                switch rawValue {
+                case "windowed": self = .windowed
+                case "hover": self = .hover
+                case "widget": self = .widget
+                default: self = .unknown(rawValue)
+                }
+            }
+
+            public var rawValue: String {
+                switch self {
+                case .windowed: return "windowed"
+                case .hover: return "hover"
+                case .widget: return "widget"
+                case .unknown(let raw): return raw
+                }
+            }
+
+            public var description: String { rawValue }
+
+            /// Whether this HUDKit knows the kind.
+            public var isKnown: Bool {
+                if case .unknown = self { return false }
+                return true
+            }
+
+            /// Whether MacHUD's tool dock shows panels of this kind (hover and windowed).
+            public var isDockKind: Bool { self == .hover || self == .windowed }
+
+            public init(from decoder: Decoder) throws {
+                self.init(rawValue: try decoder.singleValueContainer().decode(String.self))
+            }
+
+            public func encode(to encoder: Encoder) throws {
+                var c = encoder.singleValueContainer()
+                try c.encode(rawValue)
+            }
+        }
 
         public init(id: String, title: String, symbol: String? = nil, defaultSize: HUDSize? = nil,
                     compactSize: HUDSize? = nil, capabilities: [String] = [], verbs: [String] = [],
-                    settingsSchema: String? = nil, kind: Kind = .windowed, order: Int? = nil) {
+                    settingsSchema: String? = nil, kind: Kind = .windowed, order: Int? = nil,
+                    widget: HUDWidgetSpec? = nil) {
             self.id = id
             self.title = title
             self.symbol = symbol
@@ -64,6 +114,7 @@ public struct HUDManifest: Codable, Equatable, Sendable {
             self.settingsSchema = settingsSchema
             self.kind = kind
             self.order = order
+            self.widget = kind == .widget ? (widget ?? HUDWidgetSpec()) : widget
         }
 
         public init(from decoder: Decoder) throws {
@@ -78,6 +129,9 @@ public struct HUDManifest: Codable, Equatable, Sendable {
             settingsSchema = try c.decodeIfPresent(String.self, forKey: .settingsSchema)
             kind = (try? c.decodeIfPresent(Kind.self, forKey: .kind)) ?? .windowed
             order = try? c.decodeIfPresent(Int.self, forKey: .order)
+            // Lenient like `order`: a malformed widget object reads as the defaults.
+            let spec = try? c.decodeIfPresent(HUDWidgetSpec.self, forKey: .widget)
+            widget = kind == .widget ? (spec ?? HUDWidgetSpec()) : spec
         }
 
         /// The JSON object form used by `hello`.
@@ -98,10 +152,18 @@ public struct HUDManifest: Codable, Equatable, Sendable {
 
     public func panel(id: String) -> Panel? { panels.first { $0.id == id } }
 
+    /// The panels MacHUD's tool dock shows (hover and windowed), in `dockSorted` order. Empty
+    /// for an app that only serves widgets: such an app has no dock button.
+    public var dockPanels: [Panel] { Self.dockSorted(panels) }
+
+    /// The widget types the app serves (`kind: widget` panels), in manifest order.
+    public var widgetPanels: [Panel] { panels.filter { $0.kind == .widget } }
+
     /// MacHUD dock order: hover panels first, then windowed; within a kind by `order`
-    /// (panels without one last), ties kept in their given order.
+    /// (panels without one last), ties kept in their given order. Widget panels and kinds
+    /// this HUDKit does not know are left out: they never get a dock button.
     public static func dockSorted(_ panels: [Panel]) -> [Panel] {
-        panels.enumerated().sorted { a, b in
+        panels.filter(\.kind.isDockKind).enumerated().sorted { a, b in
             let ka = a.element.kind == .hover ? 0 : 1, kb = b.element.kind == .hover ? 0 : 1
             if ka != kb { return ka < kb }
             switch (a.element.order, b.element.order) {

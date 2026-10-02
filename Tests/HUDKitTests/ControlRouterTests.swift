@@ -60,8 +60,22 @@ final class ControlRouterTests: XCTestCase {
 
     func testInstallRegistersRequiredVerbs() {
         router.install()
-        XCTAssertEqual(Set(server.commands), ["hello", "panel", "state", "settings", "action", "quit", "menu", "menu-invoke"])
+        XCTAssertEqual(Set(server.commands), ["hello", "panel", "state", "settings", "action", "quit", "menu", "menu-invoke", "widget"])
         XCTAssertEqual(HUDControlRouter.requiredVerbs, ["hello", "panel", "state", "subscribe", "settings", "action", "quit"])
+        XCTAssertEqual(HUDControlRouter.optionalVerbs, ["menu", "menu-invoke"])
+        XCTAssertEqual(HUDControlRouter.widgetVerb, "widget")
+    }
+
+    func testHelloListsWidgetOnlyWithAWidgetHost() {
+        XCTAssertFalse((call("hello")["verbs"] as? [String])?.contains("widget") ?? true)
+        let r = call("widget", ["action": "list"])
+        XCTAssertEqual(r["ok"] as? Bool, false)
+        XCTAssertEqual(r["error"] as? String, "no widgets")
+        let widgets = HUDWidgetHost(manifest: nil)
+        widgets.presentsWindows = false
+        router.widgetHost = widgets
+        XCTAssertEqual(call("hello")["verbs"] as? [String], HUDControlRouter.requiredVerbs + ["widget"])
+        XCTAssertEqual(call("widget", ["action": "list"])["ok"] as? Bool, true, "routed to the widget host")
     }
 
     func testHello() {
