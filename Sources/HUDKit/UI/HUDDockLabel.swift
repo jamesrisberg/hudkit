@@ -108,6 +108,8 @@ final class HUDDockLabelWindow: NSPanel {
     static let cornerRadius: CGFloat = 6
     static let fadeIn: TimeInterval = 0.1
     static let fadeOut: TimeInterval = 0.08
+    /// Every Space, ignored by Mission Control and the ⌘` cycle, over full-screen apps.
+    static let spacesBehavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
 
     private let text = NSTextField(labelWithString: "")
     private var hiding = false
@@ -127,7 +129,7 @@ final class HUDDockLabelWindow: NSPanel {
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         animationBehavior = .none
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        collectionBehavior = Self.spacesBehavior
         var style = HUDGlassView.Style.plain
         style.cornerRadius = Self.cornerRadius
         let glass = HUDGlassView(style: style)
@@ -144,6 +146,18 @@ final class HUDDockLabelWindow: NSPanel {
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    // Every order-in re-asserts the Spaces behaviour, so the label shows on the Space the
+    // user is on (see `reassertAllSpaces`).
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        if place != .out { reassertAllSpaces(Self.spacesBehavior) }
+        super.order(place, relativeTo: otherWin)
+    }
+
+    override func orderFrontRegardless() {
+        reassertAllSpaces(Self.spacesBehavior)
+        super.orderFrontRegardless()
+    }
 
     func update(text string: String) {
         guard text.stringValue != string else { return }
