@@ -5,9 +5,10 @@
 #       add or update the app's entry. Metadata not given as an option is kept from the
 #       existing entry, else read from the app repo (HUD_APP_DIR, default ../<repo> next to
 #       HUDKit): id, name and minOS from Sources/*/Resources/Info.plist, kind from the first
-#       panel in machud.json ("umbrella" for MacHUD), summary from the GitHub repo
-#       description. bundled defaults to kind == hover.
-#       Options: --id --name --kind windowed|hover|umbrella --summary --min-os
+#       dock panel (hover or windowed; a panel without a kind is windowed) in machud.json,
+#       "widget" for an app that serves only widgets ("umbrella" for MacHUD), summary from the
+#       GitHub repo description. bundled defaults to kind == hover.
+#       Options: --id --name --kind windowed|hover|widget|umbrella --summary --min-os
 #                --bundled true|false --icon --homepage --published-at
 #   hud-catalog.sh hudkit <version>
 #       set the catalog's "hudkit" (the current HUDKit contract version)
@@ -125,7 +126,10 @@ if [[ "$CMD" == set ]]; then
   fi
   if [[ -z "$KIND" ]]; then
     if [[ "$REPO" == machud ]]; then KIND=umbrella
-    elif [[ -n "$MANIFEST" ]]; then KIND="$(jq -r '.panels[0].kind // "hover"' "$MANIFEST")"
+    elif [[ -n "$MANIFEST" ]]; then
+      KIND="$(jq -r '[.panels[] | (.kind // "windowed")] as $k
+        | ([$k[] | select(. == "hover" or . == "windowed")][0]
+           // (if any($k[]; . == "widget") then "widget" else empty end) // "")' "$MANIFEST")"
     fi
   fi
   if [[ -z "$SUMMARY" ]]; then
@@ -139,7 +143,7 @@ if [[ "$CMD" == set ]]; then
   [[ -n "$HOMEPAGE" ]] || HOMEPAGE="https://github.com/$OWNER/$REPO"
   [[ -n "$MINOS" ]] || MINOS="14.0"
   for v in ID NAME KIND; do [[ -n "${(P)v}" ]] || die "cannot determine ${(L)v} for $REPO; pass --${(L)v}"; done
-  [[ "$KIND" == (windowed|hover|umbrella) ]] || die "kind must be windowed, hover or umbrella: $KIND"
+  [[ "$KIND" == (windowed|hover|widget|umbrella) ]] || die "kind must be windowed, hover, widget or umbrella: $KIND"
   [[ "$BUNDLED" == (true|false) ]] || die "bundled must be true or false: $BUNDLED"
   PUBLISHED="${opt[published-at]:-$(now)}"
 
