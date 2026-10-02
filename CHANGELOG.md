@@ -14,8 +14,6 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   the `HUDPanelWindow` whose new `panelID` matches, else a one-panel app's only visible one)
   finds the window. `HUDPanelWindow.activeSpaceDidSettleNotification` makes the router push
   `state` when the value settles after a show.
-- `HUDPanelWindow.hoverCollectionBehavior(keeping:)`: the hover Spaces behaviour plus an app's
-  non-conflicting extra bits.
 
 ### Fixed
 - Hover panels and dock labels appear on the Space the user is on, every time. The window

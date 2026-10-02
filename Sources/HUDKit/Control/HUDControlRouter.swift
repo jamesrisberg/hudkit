@@ -56,8 +56,9 @@ public final class HUDControlRouter {
         set { explicitPolicy = newValue }
     }
     private var explicitPolicy: HUDStatusItemPolicy?
-    /// Republishes `state` when a hover panel's Space settles (`onActiveSpace`).
-    private var spaceObserver: NSObjectProtocol?
+    /// Republishes `state` when a hover panel's Space settles (`onActiveSpace`); removed with
+    /// the router.
+    private var spaceObserver: NotificationObservation?
     static let panelVerbs = ["show", "hide", "toggle", "frame", "mode"]
     /// Args that address the panel command itself; everything else is an option.
     static let panelReserved: Set<String> = ["id", "action", "_", "show", "hide", "toggle"]
@@ -71,10 +72,10 @@ public final class HUDControlRouter {
     /// Registers the contract commands on the server. Commands registered afterwards with the
     /// same names replace these.
     public func install() {
-        spaceObserver = spaceObserver ?? NotificationCenter.default.addObserver(
+        spaceObserver = spaceObserver ?? NotificationObservation(NotificationCenter.default.addObserver(
             forName: HUDPanelWindow.activeSpaceDidSettleNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.publishState() }
-        }
+        })
         for verb in Self.requiredVerbs + Self.optionalVerbs where verb != "subscribe" {
             server.register(verb) { [weak self] args, done in
                 guard let self else { done(["ok": false, "error": "router gone"]); return }
@@ -264,4 +265,12 @@ public final class HUDControlRouter {
         done(response)
         publishState()
     }
+}
+
+/// Removes a block-based notification observer when released (a `@MainActor` class's deinit
+/// cannot touch its non-Sendable token).
+final class NotificationObservation: @unchecked Sendable {
+    private let token: NSObjectProtocol
+    init(_ token: NSObjectProtocol) { self.token = token }
+    deinit { NotificationCenter.default.removeObserver(token) }
 }

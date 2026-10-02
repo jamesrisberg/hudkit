@@ -45,10 +45,10 @@ private enum WindowServerSpaces {
         return Set(list)
     }
 
-    /// Reproduces the 2026-10-01 failure: the window server drops the window's sticky
-    /// (all-Spaces) tag while AppKit still believes `.canJoinAllSpaces`, and the window is
-    /// left on one other Space. Clearing the tag through AppKit is impossible (its setter
-    /// skips an unchanged value), which is why a plain show never repaired it.
+    /// Puts `window` in the state the Spaces handling must repair: the window server's sticky
+    /// (all-Spaces) tag cleared while AppKit still holds `.canJoinAllSpaces`, and the window on
+    /// one other Space. AppKit cannot produce this itself, and its setter skips an unchanged
+    /// value, so a plain order-in leaves the window there.
     static func strand(_ window: NSWindow, on space: UInt64) {
         guard let connection, let clearTags, let move else { return }
         var tags: [UInt32] = [1 << 11, 0]  // kCGSStickyTagBit
@@ -118,10 +118,10 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
 
     func testHoverBehaviourKeepingExtras() {
         let hover = HUDPanelWindow.hoverCollectionBehavior
-        XCTAssertEqual(HUDPanelWindow.hoverCollectionBehavior(keeping: []), hover)
-        XCTAssertEqual(HUDPanelWindow.hoverCollectionBehavior(keeping: [.managed, .participatesInCycle, .moveToActiveSpace]),
+        XCTAssertEqual(HUDPanelWindow.hoverBehavior(keeping: []), hover)
+        XCTAssertEqual(HUDPanelWindow.hoverBehavior(keeping: [.managed, .participatesInCycle, .moveToActiveSpace]),
                        hover, "conflicting Spaces bits are replaced")
-        XCTAssertEqual(HUDPanelWindow.hoverCollectionBehavior(keeping: [.ignoresCycle, .transient]),
+        XCTAssertEqual(HUDPanelWindow.hoverBehavior(keeping: [.ignoresCycle, .transient]),
                        hover.union(.ignoresCycle), "transient conflicts with stationary")
     }
 
@@ -144,9 +144,9 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
 
     // MARK: - Window server side
 
-    /// The live failure: a hover panel whose all-Spaces membership the window server lost,
-    /// parked on another desktop. A show must bring it to the desktop the user is on and
-    /// back onto every desktop, without taking focus.
+    /// A hover panel whose all-Spaces membership the window server lost, parked on another
+    /// desktop: every way of showing it brings it to the desktop the user is on and back onto
+    /// every desktop, without taking focus.
     func testStrandedHoverPanelRejoinsEverySpaceOnShow() throws {
         try XCTSkipUnless(WindowServerSpaces.isAvailable, "SkyLight calls unavailable")
         let reference = hoverPanel()
@@ -202,36 +202,96 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
 }
 
 extension HUDPanelWindowSpacesTests {
-    /// The fallback on its own (the show's re-assertion switched off): a hover panel shown
-    /// while stranded on another desktop is brought over, and back onto every desktop,
-    /// without taking focus; observers hear that it settled.
-    func testFallbackBringsAStrandedPanelOver() throws {
+    /// Every Space of the main display, and one that is not current, from a reference hover
+    /// panel; skips without the SkyLight calls or a second desktop.
+    private func spacesForStranding() throws -> (all: Set<UInt64>, other: UInt64) {
         try XCTSkipUnless(WindowServerSpaces.isAvailable, "SkyLight calls unavailable")
         let reference = hoverPanel()
         reference.orderFrontRegardless()
         settle()
         let all = WindowServerSpaces.spaces(of: reference)
         let active = try XCTUnwrap(WindowServerSpaces.currentSpace(for: reference))
-        guard let other = all.subtracting([active]).sorted().first else { throw XCTSkip("needs a second desktop on the main display") }
         reference.orderOut(nil)
-        let w = hoverPanel()
+        guard let other = all.subtracting([active]).sorted().first else { throw XCTSkip("needs a second desktop on the main display") }
+        return (all, other)
+    }
+
+    /// The fallback on its own (the show's re-assertion switched off): a keyable hover panel
+    /// shown key while stranded on another desktop is brought over, back onto every desktop,
+    /// still key; the settle notification comes once AppKit reports it on the active Space,
+    /// so what the router publishes then is `onActiveSpace: true`.
+    func testFallbackBringsAStrandedPanelOver() throws {
+        let (all, other) = try spacesForStranding()
+        let w = hoverPanel(keyable: true)
         w.orderFrontRegardless()
         w.orderOut(nil)
         WindowServerSpaces.strand(w, on: other)
         settle()
         XCTAssertEqual(WindowServerSpaces.spaces(of: w), [other], "stranded (precondition)")
         w.reassertsSpacesOnShow = false
-        let settled = expectation(forNotification: HUDPanelWindow.activeSpaceDidSettleNotification, object: w)
-        w.orderFrontRegardless()
+        w.panelID = "main"
+        let host = SpacesHost(window: w)
+        var published: Bool?
+        let settled = expectation(forNotification: HUDPanelWindow.activeSpaceDidSettleNotification, object: w) { _ in
+            published = HUDPanelHostDefaults.stateJSON(HUDPanelState(id: "main", visible: true), of: host)["onActiveSpace"] as? Bool
+            return true
+        }
+        w.makeKeyAndOrderFront(nil)
+        let wasKey = w.isKeyWindow
         XCTAssertFalse(w.isOnActiveSpace, "precondition: shown on the other desktop")
         wait(for: [settled], timeout: 2)
+        XCTAssertEqual(published, true, "the settled value the router publishes")
         settle()
         XCTAssertTrue(w.isOnActiveSpace)
         XCTAssertEqual(WindowServerSpaces.spaces(of: w), all)
         XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.hoverCollectionBehavior)
-        XCTAssertFalse(w.isKeyWindow)
+        XCTAssertEqual(w.isKeyWindow, wasKey, "key status survives the move")
         XCTAssertFalse(w.ensureOnActiveSpace(), "nothing to do once it is here")
+        w.resignKey()
     }
+
+    /// A dock label whose all-Spaces membership the window server lost rejoins every desktop
+    /// when it is next shown.
+    func testStrandedDockLabelRejoinsEverySpaceOnShow() throws {
+        let (all, other) = try spacesForStranding()
+        let label = HUDDockLabelWindow()
+        windows.append(label)
+        label.show(at: CGRect(x: 4, y: 4, width: 10, height: 10))
+        label.hide(animated: false)
+        WindowServerSpaces.strand(label, on: other)
+        settle()
+        XCTAssertEqual(WindowServerSpaces.spaces(of: label), [other], "stranded (precondition)")
+        label.show(at: CGRect(x: 4, y: 4, width: 10, height: 10))
+        settle()
+        XCTAssertEqual(WindowServerSpaces.spaces(of: label), all)
+        XCTAssertTrue(label.isOnActiveSpace)
+    }
+
+    /// A hover panel on a second display's current desktop counts as on the active Space
+    /// (`isOnActiveSpace` covers every display's current Space), so the fallback leaves it
+    /// alone instead of ordering it out and in.
+    func testPanelOnASecondDisplayIsLeftAlone() throws {
+        guard NSScreen.screens.count > 1 else { throw XCTSkip("needs a second display") }
+        let second = NSScreen.screens[1].frame
+        let w = hoverPanel()
+        w.setFrame(CGRect(x: second.minX + 4, y: second.minY + 4, width: 10, height: 10), display: false)
+        w.orderFrontRegardless()
+        settle()
+        XCTAssertTrue(w.screen == NSScreen.screens[1])
+        XCTAssertTrue(w.isOnActiveSpace)
+        XCTAssertFalse(w.ensureOnActiveSpace())
+    }
+}
+
+@MainActor
+private final class SpacesHost: HUDPanelHost {
+    let window: HUDPanelWindow
+    init(window: HUDPanelWindow) { self.window = window }
+    var panelStates: [HUDPanelState] { [HUDPanelState(id: "main", visible: true)] }
+    func showPanel(_ id: String) throws {}
+    func hidePanel(_ id: String) throws {}
+    func panelWindow(_ id: String) -> NSWindow? { window }
+    func quit() {}
 }
 
 // MARK: - Reporting onActiveSpace
