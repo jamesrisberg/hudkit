@@ -177,6 +177,41 @@ public protocol HUDPanelHost: AnyObject {
 
     /// Clean exit. Called after the `quit` response has been sent.
     func quit()
+
+    /// The window that shows panel `id`, so panel replies and `state` can say whether it is on
+    /// the Space the user is looking at (`onActiveSpace`). Defaults to
+    /// `HUDPanelHostDefaults.panelWindow(_:of:)`; override it when that cannot tell.
+    func panelWindow(_ id: String) -> NSWindow?
+}
+
+/// Default implementations a host that overrides a requirement can still call.
+@MainActor
+public enum HUDPanelHostDefaults {
+    /// The `HUDPanelWindow` whose `panelID` is `id`; else, for a host with a single panel, the
+    /// app's only visible `HUDPanelWindow`; else nil (nothing is claimed).
+    public static func panelWindow(_ id: String, of host: HUDPanelHost) -> NSWindow? {
+        guard let app = NSApp as NSApplication? else { return nil }  // no app yet (tests, tools)
+        let windows = app.windows.compactMap { $0 as? HUDPanelWindow }
+        if let tagged = windows.first(where: { $0.panelID == id }) { return tagged }
+        guard host.panelStates.count == 1, host.panelStates.first?.id == id else { return nil }
+        let visible = windows.filter { $0.isVisible && $0.panelID == nil }
+        return visible.count == 1 ? visible[0] : nil
+    }
+
+    /// Whether panel `id` is on screen on the active Space: nil unless the host says it is
+    /// visible and its window (`panelWindow(_:)`) is ordered in.
+    public static func onActiveSpace(_ id: String, of host: HUDPanelHost) -> Bool? {
+        guard host.panelState(id)?.visible == true, let window = host.panelWindow(id), window.isVisible else { return nil }
+        return window.isOnActiveSpace
+    }
+
+    /// `state.json` plus `onActiveSpace` when known: what `state`, `subscribe` events and
+    /// panel replies carry.
+    static func stateJSON(_ state: HUDPanelState, of host: HUDPanelHost) -> [String: Any] {
+        var d = state.json
+        if let on = onActiveSpace(state.id, of: host) { d["onActiveSpace"] = on }
+        return d
+    }
 }
 
 public extension HUDPanelHost {
@@ -219,4 +254,6 @@ public extension HUDPanelHost {
     }
 
     func quit() { NSApp.terminate(nil) }
+
+    func panelWindow(_ id: String) -> NSWindow? { HUDPanelHostDefaults.panelWindow(id, of: self) }
 }

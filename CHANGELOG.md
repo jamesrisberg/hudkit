@@ -7,7 +7,21 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Added
+- `onActiveSpace` in `panel` replies, `state` and `state` events: whether a visible panel's
+  window is on the Space the user is looking at, so MacHUD can tell a show that never reached
+  the screen. `HUDPanelHost.panelWindow(_:)` (default `HUDPanelHostDefaults.panelWindow(_:of:)`:
+  the `HUDPanelWindow` whose new `panelID` matches, else a one-panel app's only visible one)
+  finds the window. `HUDPanelWindow.activeSpaceDidSettleNotification` makes the router push
+  `state` when the value settles after a show.
+
 ### Fixed
+- Hover panels and dock labels appear on the Space the user is on, every time. The window
+  server can drop a window's all-Spaces membership while AppKit still reports
+  `.canJoinAllSpaces`, which left a panel answering `visible: true` from another desktop; every
+  order-in of a hover `HUDPanelWindow` or a dock label now re-asserts the behaviour, and a
+  hover panel still on another Space shortly after is brought over with `.moveToActiveSpace`,
+  without taking focus or switching Spaces. Apps pick this up by rebuilding.
 - `hud-release.sh` builds through the repo's `build.sh`, so a release carries the helpers it
   names in `HUD_HELPERS` (MacHUD's voice host and MCP server), and stops when one is missing.
 

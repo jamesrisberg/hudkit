@@ -6,7 +6,7 @@ import AppKit
 /// |---|---|
 /// | `hello` | → `{hudkit, app, name, version?, panels:[...], verbs}` (`hudkit` is the contract version, `version` the app's, `verbs` always `requiredVerbs`) |
 /// | `panel` | `id=` plus `action=show/hide/toggle/frame/mode` (or the sub-verb as a bare flag, `panel show id=x`); `frame` takes `x y w h`; `mode` takes `mode=compact/full/parked` or the bare mode, plus optional `edge=left/right/top/bottom` and `peek=` for `parked`; `show`/`toggle` take optional `from=<edge> anchor=x,y,w,h reason=hover/click/summon`, `hide` takes `to=<edge>` (plus `anchor`/`reason`), all passed to `showPanel/hidePanel/togglePanel(_:options:)` (see `HUDPanelTransition`) |
-/// | `state` | → `{panels:[{id, visible, mode, badge?, status?}]}` |
+/// | `state` | → `{panels:[{id, visible, mode, badge?, status?, onActiveSpace?}]}` (`onActiveSpace`: see `HUDPanelHostDefaults.onActiveSpace`) |
 /// | `settings` | `get [key=]` / `set k=v ...` (values the host's schema describes are validated against it first) / `schema` (→ `{schema}`, see `HUDSettingsSchema`) |
 /// | `action` | `action <verb> [k=v…]` (bare verb, recorded as `_` by the CLI parser) or `name=<verb>`, plus payload args |
 /// | `quit` | replies, then `host.quit()` |
@@ -56,6 +56,9 @@ public final class HUDControlRouter {
         set { explicitPolicy = newValue }
     }
     private var explicitPolicy: HUDStatusItemPolicy?
+    /// Republishes `state` when a hover panel's Space settles (`onActiveSpace`); removed with
+    /// the router.
+    private var spaceObserver: NotificationObservation?
     static let panelVerbs = ["show", "hide", "toggle", "frame", "mode"]
     /// Args that address the panel command itself; everything else is an option.
     static let panelReserved: Set<String> = ["id", "action", "_", "show", "hide", "toggle"]
@@ -69,6 +72,10 @@ public final class HUDControlRouter {
     /// Registers the contract commands on the server. Commands registered afterwards with the
     /// same names replace these.
     public func install() {
+        spaceObserver = spaceObserver ?? NotificationObservation(NotificationCenter.default.addObserver(
+            forName: HUDPanelWindow.activeSpaceDidSettleNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.publishState() }
+        })
         for verb in Self.requiredVerbs + Self.optionalVerbs where verb != "subscribe" {
             server.register(verb) { [weak self] args, done in
                 guard let self else { done(["ok": false, "error": "router gone"]); return }
@@ -80,13 +87,13 @@ public final class HUDControlRouter {
     /// Pushes the current state to subscribers.
     public func publishState() {
         guard let host else { return }
-        server.publish("state", payload: ["panels": host.panelStates.map(\.json)])
+        server.publish("state", payload: ["panels": host.panelStates.map { HUDPanelHostDefaults.stateJSON($0, of: host) }])
     }
 
     /// Pushes a single panel's badge/status change (a `state` event restricted to that panel).
     public func publishPanel(_ id: String) {
-        guard let state = host?.panelState(id) else { return }
-        server.publish("state", payload: ["panels": [state.json]])
+        guard let host, let state = host.panelState(id) else { return }
+        server.publish("state", payload: ["panels": [HUDPanelHostDefaults.stateJSON(state, of: host)]])
     }
 
     /// Handles one contract command. Exposed for tests and for apps that route manually.
@@ -103,7 +110,7 @@ public final class HUDControlRouter {
                 if let statusItemPolicy { r["statusItem"] = statusItemPolicy.json }
                 done(r)
             case "state":
-                done(["ok": true, "panels": host.panelStates.map(\.json)])
+                done(["ok": true, "panels": host.panelStates.map { HUDPanelHostDefaults.stateJSON($0, of: host) }])
             case "panel":
                 try handlePanel(host, args: args, done: done)
             case "settings":
@@ -253,8 +260,17 @@ public final class HUDControlRouter {
         if let state = host.panelState(id) {
             response["visible"] = state.visible
             response["mode"] = state.mode.rawValue
+            if let on = HUDPanelHostDefaults.onActiveSpace(id, of: host) { response["onActiveSpace"] = on }
         }
         done(response)
         publishState()
     }
+}
+
+/// Removes a block-based notification observer when released (a `@MainActor` class's deinit
+/// cannot touch its non-Sendable token).
+final class NotificationObservation: @unchecked Sendable {
+    private let token: NSObjectProtocol
+    init(_ token: NSObjectProtocol) { self.token = token }
+    deinit { NotificationCenter.default.removeObserver(token) }
 }
