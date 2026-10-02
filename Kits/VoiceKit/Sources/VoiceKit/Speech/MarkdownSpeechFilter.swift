@@ -1,16 +1,18 @@
 import Foundation
 
-/// Strips markdown formatting from a reply's sentences before they reach a voice, so
+/// Strips markdown formatting from a reply's chunks before they reach a voice, so
 /// `SpeechStreamer` speaks the words a reply means rather than its markup. It filters each
-/// sentence `SentenceSplitter` already produced: a fence delimiter and every line of a fenced
-/// code block always arrive as their own sentence, since a line break always ends one there,
-/// so a persisted `inCodeBlock` flag is enough to recognize a fence without its own buffering.
-/// Heading and list markers are dropped, emphasis markers are removed (the emphasized words
-/// are kept), a link speaks its text, inline code is spoken as plain words, and a fenced code
-/// block's lines, and the fence lines themselves, are skipped entirely (never spoken).
+/// chunk `SpeechChunker` produced: a line break always ends a chunk, so a fence delimiter
+/// always starts its own chunk and every chunk of a fenced code block's lines falls between
+/// two fences; a persisted `inCodeBlock` flag is enough to recognize a fence without its own
+/// buffering. Heading and list markers are dropped, emphasis markers are removed (the
+/// emphasized words are kept), a link speaks its text, inline code is spoken as plain words,
+/// and a fenced code block's lines, and the fence lines themselves, are skipped entirely
+/// (never spoken). The chunker never cuts inside inline markup (`inlineMarkupClosed`), so
+/// each chunk's markup is whole.
 ///
-/// A marker is only recognized at the very start of a sentence, which is a genuine source line
-/// for a real heading or list item (markdown always puts those on their own line). A sentence
+/// A marker is only recognized at the very start of a chunk, which is a genuine source line
+/// for a real heading or list item (markdown always puts those on their own line). A chunk
 /// that happens to start with "- " or "1. " because a length or punctuation cut fell there
 /// rather than at a line break is a rare false positive this accepts.
 public struct MarkdownSpeechFilter: Sendable {
@@ -18,7 +20,7 @@ public struct MarkdownSpeechFilter: Sendable {
 
     public init() {}
 
-    /// The cleaned sentence, or nil for a fence delimiter or a line inside a fenced code block
+    /// The cleaned chunk, or nil for a fence delimiter or text inside a fenced code block
     /// (never spoken).
     public mutating func filter(_ sentence: String) -> String? {
         let trimmed = sentence.trimmingCharacters(in: .whitespaces)
@@ -94,6 +96,66 @@ public struct MarkdownSpeechFilter: Sendable {
             i += 1
         }
         return result
+    }
+
+    /// For each offset 0...line.count, whether a cut there leaves no inline markup open (inline
+    /// code, a link's text or target, strong or emphasis), so both sides filter cleanly on
+    /// their own. An offset inside a marker run is never a clean cut. Openers are recognized as
+    /// `stripInline` recognizes them, so an unpaired "*" in "3 * 4" or the "_" in "snake_case"
+    /// opens nothing; an opener that is never closed keeps every later cut unclean.
+    static func inlineMarkupClosed(_ line: [Character]) -> [Bool] {
+        var closed = Array(repeating: true, count: line.count + 1)
+        var code = 0
+        var linkText = false
+        var linkTarget = false
+        var strong: Character?
+        var emphasis: Character?
+        var i = 0
+        while i < line.count {
+            let c = line[i]
+            var run = 1
+            while i + run < line.count, line[i + run] == c, "`*_".contains(c) { run += 1 }
+            var next = i + 1
+            if code > 0 {
+                if c == "`" {
+                    if run == code { code = 0 }
+                    next = i + run
+                }
+            } else if c == "`" {
+                code = run
+                next = i + run
+            } else if linkTarget {
+                if c == ")" { linkTarget = false }
+            } else if c == "[", !linkText {
+                linkText = true
+            } else if c == "]", linkText {
+                linkText = false
+                if i + 1 < line.count, line[i + 1] == "(" {
+                    linkTarget = true
+                    next = i + 2
+                }
+            } else if c == "*" || c == "_" {
+                if run == 2 {
+                    if strong == c {
+                        strong = nil
+                    } else if strong == nil, isEmphasisOpener(line, at: i + 1) {
+                        strong = c
+                    }
+                } else if run == 1 {
+                    if emphasis == c, i > 0, !line[i - 1].isWhitespace {
+                        emphasis = nil
+                    } else if emphasis == nil, isEmphasisOpener(line, at: i) {
+                        emphasis = c
+                    }
+                }
+                next = i + run
+            }
+            let open = code > 0 || linkText || linkTarget || strong != nil || emphasis != nil
+            for offset in (i + 1)..<next { closed[offset] = false }
+            closed[next] = !open
+            i = next
+        }
+        return closed
     }
 
     /// Finds a run of exactly `count` `marker` characters at `from`, a matching run later in

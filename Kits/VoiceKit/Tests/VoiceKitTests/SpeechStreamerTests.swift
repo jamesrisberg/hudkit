@@ -42,6 +42,7 @@ final class RecordingPrefetchingVoice: PrefetchingSpeechVoice {
     var played: [String] = []
     var prepared: [String] = []
     var stops = 0
+    var warmUps = 0
     private var completion: ((Result<Void, Error>) -> Void)?
     private var prepareCompletions: [String: (Result<SpeechClip, Error>) -> Void] = [:]
 
@@ -64,6 +65,8 @@ final class RecordingPrefetchingVoice: PrefetchingSpeechVoice {
         stops += 1
         completion = nil
     }
+
+    func warmUp() { warmUps += 1 }
 
     func finishCurrent(_ result: Result<Void, Error> = .success(())) {
         let callback = completion
@@ -124,7 +127,7 @@ struct SentenceSplitterTests {
 struct SpeechStreamerTests {
     @Test func speaksSentencesInOrderAsTheyArrive() {
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         var finished: [Bool] = []
         streamer.onFinished = { finished.append((try? $0.get()) != nil) }
         streamer.append("Sure. I'll ")
@@ -145,7 +148,7 @@ struct SpeechStreamerTests {
 
     @Test func stopDropsTheQueueAndLateCompletions() {
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         var finished = 0
         streamer.onFinished = { _ in finished += 1 }
         streamer.append("One. Two. Three ")
@@ -165,7 +168,7 @@ struct SpeechStreamerTests {
     @Test func aFailureEndsTheStreamOnce() {
         struct Broken: Error {}
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         var results: [Bool] = []
         streamer.onFinished = { results.append((try? $0.get()) != nil) }
         streamer.append("One. Two. ")
@@ -185,7 +188,7 @@ struct SpeechStreamerTests {
 
     @Test func aFinishedStreamIgnoresMoreTextUntilStopped() {
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         var finished = 0
         streamer.onFinished = { _ in finished += 1 }
         streamer.append("Done.")
@@ -200,7 +203,7 @@ struct SpeechStreamerTests {
 
     @Test func finishingEmptyTextCompletesAtOnce() {
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         var finished = false
         streamer.onFinished = { _ in finished = true }
         streamer.finish()
@@ -210,7 +213,7 @@ struct SpeechStreamerTests {
 
     @Test func stripsMarkdownAndSkipsCodeBlocksOnARealisticReply() {
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         streamer.append(
             "Here's how to fix it:\n\n```swift\nlet x = 1\nprint(x)\n```\n\n" +
             "**Note:** run `swift build` first. "
@@ -222,54 +225,276 @@ struct SpeechStreamerTests {
         voice.finishCurrent()
     }
 
-    @Test func prefetchesTheNextSentenceWhileTheCurrentPlays() {
+    @Test func everyChunkIsPreparedAsSoonAsItIsQueuedAndPlayedOnceReady() {
         let voice = RecordingPrefetchingVoice()
-        let streamer = SpeechStreamer(voice: voice)
-        streamer.append("One. Two. Three. ")
-        #expect(voice.spoken == ["One."])
-        // The next sentence starts synthesizing immediately, while "One." is still speaking.
-        #expect(voice.prepared == ["Two."])
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        streamer.append("One. Two. ")
+        // Nothing plays yet, but both sentences are already synthesizing.
+        #expect(voice.prepared == ["One.", "Two."])
+        #expect(voice.played.isEmpty)
+        #expect(streamer.isSpeaking)
+        voice.finishPrepare("Two.")
+        #expect(voice.played.isEmpty)  // "Two." waits for "One."
+        voice.finishPrepare("One.")
+        #expect(voice.played == ["One."])
+        voice.finishCurrent()
+        #expect(voice.played == ["One.", "Two."])
+        // A prepared clip is played, never synthesized again.
+        #expect(voice.spoken.isEmpty)
+    }
+
+    @Test func synthesisRunsUpToTwoChunksAheadOfTheOnePlaying() {
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        streamer.append("One. Two. Three. Four. Five. ")
+        // Before anything plays: the next chunk plus two ahead of it.
+        #expect(voice.prepared == ["One.", "Two.", "Three."])
+        voice.finishPrepare("One.")
+        #expect(voice.played == ["One."])
+        #expect(voice.prepared == ["One.", "Two.", "Three."])
         voice.finishPrepare("Two.")
         voice.finishCurrent()
-        // The prepared clip is played directly, never re-spoken.
-        #expect(voice.spoken == ["One."])
-        #expect(voice.played == ["Two."])
-        #expect(voice.prepared == ["Two.", "Three."])
-        voice.finishPrepare("Three.")
-        voice.finishCurrent()
-        #expect(voice.played == ["Two.", "Three."])
-        voice.finishCurrent()
+        #expect(voice.played == ["One.", "Two."])
+        #expect(voice.prepared == ["One.", "Two.", "Three.", "Four."])
     }
 
-    @Test func fallsBackToSpeakWhenThePrefetchIsNotReadyYet() {
+    @Test func thePrefetchDepthIsConfigurable() {
         let voice = RecordingPrefetchingVoice()
-        let streamer = SpeechStreamer(voice: voice)
-        streamer.append("One. Two. ")
-        #expect(voice.spoken == ["One."])
-        #expect(voice.prepared == ["Two."])
-        // "One." finishes before the prefetch for "Two." does.
+        let streamer = SpeechStreamer(voice: voice, prefetchDepth: 0, clock: ManualSpeechClock())
+        streamer.append("One. Two. Three. ")
+        #expect(voice.prepared == ["One."])
+        voice.finishPrepare("One.")
+        #expect(voice.prepared == ["One."])  // nothing ahead of the one playing
         voice.finishCurrent()
-        #expect(voice.spoken == ["One.", "Two."])
-        #expect(voice.played.isEmpty)
+        #expect(voice.prepared == ["One.", "Two."])
     }
 
-    @Test func stopCancelsAPendingPrefetchAndIgnoresItsLateCompletion() {
+    @Test func aFailedPreparationEndsTheStreamWhenItsTurnComes() {
+        struct Broken: Error {}
         let voice = RecordingPrefetchingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        var results: [Bool] = []
+        streamer.onFinished = { results.append((try? $0.get()) != nil) }
         streamer.append("One. Two. ")
-        #expect(voice.prepared == ["Two."])
+        voice.finishPrepare("Two.", result: .failure(Broken()))
+        #expect(results.isEmpty)
+        voice.finishPrepare("One.")
+        voice.finishCurrent()
+        #expect(results == [false])
+        #expect(voice.played == ["One."])
+        #expect(!streamer.isSpeaking)
+    }
+
+    @Test func stopCancelsPendingPreparationsAndIgnoresTheirLateCompletions() {
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        var finished = 0
+        streamer.onFinished = { _ in finished += 1 }
+        streamer.append("One. Two. ")
+        #expect(voice.prepared == ["One.", "Two."])
         streamer.stop()
         #expect(voice.stops == 1)
-        voice.finishPrepare("Two.")  // late: must not resurrect a clip for the stopped stream
+        #expect(!streamer.isSpeaking)
+        voice.finishPrepare("One.")  // late: must not play for the stopped stream
+        voice.finishPrepare("Two.")
+        #expect(voice.played.isEmpty)
         streamer.append("Again.")
         streamer.finish()
-        #expect(voice.spoken == ["One.", "Again."])
-        #expect(voice.played.isEmpty)
+        voice.finishPrepare("Again.")
+        #expect(voice.played == ["Again."])
+        voice.finishCurrent()
+        #expect(finished == 1)
+    }
+
+    @Test func theFirstChunkIsReleasedEarlyAtAClause() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        streamer.append("Well, the build failed because, as it turns")
+        #expect(voice.spoken == ["Well, the build failed because,"])
+        streamer.append(" out, the cache was stale. ")
+        voice.finishCurrent()
+        #expect(voice.spoken == ["Well, the build failed because,", "as it turns out, the cache was stale."])
+    }
+
+    @Test func threeWordsThatWaitFourHundredMillisecondsAreSpoken() {
+        let clock = ManualSpeechClock()
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        streamer.append("Let me")
+        clock.advance(by: 1)
+        #expect(voice.spoken.isEmpty)  // two words never go early
+        streamer.append(" check")
+        clock.advance(by: 0.3)
+        streamer.append(" the")  // new text restarts the wait
+        clock.advance(by: 0.399)
+        #expect(voice.spoken.isEmpty)
+        clock.advance(by: 0.001)
+        #expect(voice.spoken == ["Let me check the"])
+        // Later chunks wait for their sentence however long the pause.
+        streamer.append(" logs now")
+        clock.advance(by: 5)
+        voice.finishCurrent()
+        #expect(voice.spoken == ["Let me check the"])
+        streamer.append(". ")
+        #expect(voice.spoken == ["Let me check the", "logs now."])
+    }
+
+    @Test func aChunkFilteredAwayDoesNotCountAsTheFirst() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        streamer.append("```\nlet x = 1\n```\nWell, the build failed because, as it turns")
+        #expect(voice.spoken == ["Well, the build failed because,"])
+    }
+
+    @Test func chunkCallbacksReportEachSpokenChunkInOrder() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        var events: [String] = []
+        streamer.onChunkStarted = { events.append("start \($1) \($0)") }
+        streamer.onChunkFinished = { events.append("end \($1) \($0)") }
+        streamer.append("One. **Two** more. ")
+        #expect(events == ["start 0 One."])
+        voice.finishCurrent()
+        #expect(events == ["start 0 One.", "end 0 One.", "start 1 Two more."])
+        streamer.stop()
+        voice.finishCurrent()
+        #expect(events == ["start 0 One.", "end 0 One.", "start 1 Two more."])
+    }
+
+    @Test func warmUpReachesTheVoice() {
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        streamer.warmUp()
+        #expect(voice.warmUps == 1)
+        #expect(voice.prepared.isEmpty)
+    }
+
+    @Test func metricsAreRecordedOncePerReply() {
+        let clock = ManualSpeechClock()
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var reports: [SpeechStreamMetrics] = []
+        streamer.onMetrics = { reports.append($0) }
+        streamer.append("One. Two. ")
+        clock.advance(by: 0.25)
+        voice.finishPrepare("One.")
+        clock.advance(by: 1)
+        voice.finishCurrent()  // "Two." is not ready: a gap starts
+        clock.advance(by: 0.2)
+        voice.finishPrepare("Two.")
+        streamer.finish()
+        clock.advance(by: 1)
+        voice.finishCurrent()
+        #expect(reports == [SpeechStreamMetrics(
+            outcome: .finished, firstChunkQueuedMilliseconds: 0, firstAudioMilliseconds: 250,
+            chunks: 2, underruns: 1, underrunMilliseconds: 200)])
+        #expect(streamer.lastMetrics == reports.first)
+        streamer.stop()
+        #expect(reports.count == 1)
+    }
+
+    @Test func aStoppedReplyReportsItsMetricsOnce() {
+        let clock = ManualSpeechClock()
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var reports: [SpeechStreamMetrics] = []
+        streamer.onMetrics = { reports.append($0) }
+        clock.advance(by: 1)
+        streamer.append("Some text")
+        clock.advance(by: 0.5)
+        streamer.append(" arrives slowly. ")
+        streamer.stop()
+        streamer.stop()
+        #expect(reports == [SpeechStreamMetrics(
+            outcome: .stopped, firstChunkQueuedMilliseconds: 500, firstAudioMilliseconds: 500,
+            chunks: 1, underruns: 0, underrunMilliseconds: 0)])
+    }
+
+    @Test func aFastStreamIsSpokenWithoutGaps() throws {
+        let clock = ManualSpeechClock()
+        let voice = TimedVoice(clock: clock, synthesisLatency: 0.3, secondsPerWord: 0.3)
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var metrics: SpeechStreamMetrics?
+        streamer.onMetrics = { metrics = $0 }
+        let reply = "Okay, so the build failed, because the cache was stale. I cleared it and ran the "
+            + "tests again. Everything passes now, and the app launches. Let me know if you want more."
+        for piece in pieces(of: reply, size: 4) {
+            streamer.append(piece)
+            clock.advance(by: 0.01)
+        }
+        streamer.finish()
+        clock.advance(by: 60)
+        #expect(voice.spans.map(\.text) == [
+            "Okay, so the build failed,", "because the cache was stale.",
+            "I cleared it and ran the tests again.", "Everything passes now, and the app launches.",
+            "Let me know if you want more.",
+        ])
+        for (earlier, later) in zip(voice.spans, voice.spans.dropFirst()) {
+            #expect(abs(later.start - earlier.end) < 0.000_001, "no gap before \(later.text)")
+        }
+        let measured = try #require(metrics)
+        #expect(measured.outcome == .finished)
+        #expect(measured.underruns == 0)
+        #expect((measured.firstChunkQueuedMilliseconds ?? .max) < 200)
+        #expect((measured.firstAudioMilliseconds ?? .max) < 500)
+    }
+
+    @Test func aSlowStreamPausesOnlyBetweenChunks() throws {
+        let clock = ManualSpeechClock()
+        let voice = TimedVoice(clock: clock, synthesisLatency: 0.3, secondsPerWord: 0.3)
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var metrics: SpeechStreamMetrics?
+        streamer.onMetrics = { metrics = $0 }
+        let reply = "Okay, so the build failed, because the cache was stale. "
+            + "I cleared it and ran every one of the tests again. Everything passes now."
+        // A word every 0.38 s: slower than speech, but never a 400 ms silence.
+        for word in reply.split(separator: " ") {
+            streamer.append(String(word) + " ")
+            clock.advance(by: 0.38)
+        }
+        streamer.finish()
+        clock.advance(by: 60)
+        #expect(voice.spans.map(\.text) == [
+            "Okay, so the build failed,", "because the cache was stale.",
+            "I cleared it and ran every one of the tests again.", "Everything passes now.",
+        ])
+        let measured = try #require(metrics)
+        #expect(measured.underruns > 0)
+        #expect(measured.underrunMilliseconds > 0)
+    }
+
+    @Test func stopMidReplyDropsEverything() {
+        let clock = ManualSpeechClock()
+        let voice = TimedVoice(clock: clock, synthesisLatency: 0.3, secondsPerWord: 0.3)
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var started = 0
+        var finished = 0
+        var metrics: SpeechStreamMetrics?
+        streamer.onChunkStarted = { _, _ in started += 1 }
+        streamer.onFinished = { _ in finished += 1 }
+        streamer.onMetrics = { metrics = $0 }
+        streamer.append("Okay, so the build failed, because the cache was stale. I cleared it. It works now. ")
+        clock.advance(by: 1)
+        #expect(voice.spans.map(\.text) == ["Okay, so the build failed,"])
+        streamer.stop()
+        #expect(voice.stops == 1)
+        #expect(!streamer.isSpeaking)
+        clock.advance(by: 30)
+        #expect(voice.spans.count == 1)
+        #expect(started == 1)
+        #expect(finished == 0)
+        #expect(metrics?.outcome == .stopped)
+        // Usable again.
+        streamer.append("Again.")
+        streamer.finish()
+        clock.advance(by: 5)
+        #expect(voice.spans.map(\.text) == ["Okay, so the build failed,", "Again."])
+        #expect(finished == 1)
     }
 
     @Test func aVoiceThatCannotPrefetchKeepsWorking() {
         let voice = RecordingVoice()
-        let streamer = SpeechStreamer(voice: voice)
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         streamer.append("One. Two. ")
         #expect(voice.spoken == ["One."])
         voice.finishCurrent()
