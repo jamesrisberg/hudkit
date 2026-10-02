@@ -29,6 +29,15 @@ open class HUDSocketServer {
     public let paths: [String]
     /// How long a request may wait for its handler before `{"ok":false,"error":"timeout"}`.
     public var handlerTimeout: TimeInterval = 90
+    /// An event pushed once to every subscriber, whatever its `events` filter, when the server
+    /// stops with the app (`stop()`, which the server also calls itself when the app
+    /// terminates). `HUDControlRouter.install()` sets it to `quitting`. The write never blocks:
+    /// a subscriber that is not reading is skipped, so stopping is never held up.
+    public var farewellEvent: String? {
+        get { subscribersLock.lock(); defer { subscribersLock.unlock() }; return farewell }
+        set { subscribersLock.lock(); farewell = newValue; subscribersLock.unlock() }
+    }
+    private var farewell: String?
 
     private var handlers: [String: Handler] = [:]
     private let handlersLock = NSLock()
@@ -140,6 +149,7 @@ open class HUDSocketServer {
         guard !listeners.isEmpty else { return }
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         terminateObserver = nil
+        sendFarewell()
         for l in listeners {
             l.source.cancel()
             unlink(l.path)
@@ -164,6 +174,18 @@ open class HUDSocketServer {
         for sub in targets where !HUDSocket.writeAll(sub.fd, data) {
             dropSubscriber(sub.fd)
         }
+    }
+
+    /// Pushes the farewell event, once, without blocking.
+    private func sendFarewell() {
+        subscribersLock.lock()
+        let event = farewell
+        farewell = nil
+        let targets = Array(subscribers.values)
+        subscribersLock.unlock()
+        guard let event else { return }
+        let data = HUDSocket.line(["event": event])
+        for sub in targets { _ = HUDSocket.writeNow(sub.fd, data) }
     }
 
     public var subscriberCount: Int {

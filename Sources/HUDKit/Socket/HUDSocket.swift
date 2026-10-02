@@ -84,6 +84,16 @@ public enum HUDSocket {
         }
     }
 
+    /// Writes `data` only if the peer's buffer takes all of it at once (`MSG_DONTWAIT`); never
+    /// waits. For a last message from a process that is exiting.
+    @discardableResult
+    static func writeNow(_ fd: Int32, _ data: Data) -> Bool {
+        data.withUnsafeBytes { buf -> Bool in
+            guard let p = buf.baseAddress else { return true }
+            return send(fd, p, buf.count, MSG_DONTWAIT) == buf.count
+        }
+    }
+
     /// Encodes a JSON object as one line (with trailing newline).
     static func line(_ object: [String: Any]) -> Data {
         var data = (try? JSONSerialization.data(withJSONObject: sanitize(object) as Any)) ?? Data("{\"ok\":false,\"error\":\"unencodable response\"}".utf8)

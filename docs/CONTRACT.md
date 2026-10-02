@@ -404,7 +404,17 @@ MacHUD's `apps quit` rely on it.
 - `events=a,b` limits the stream to those event names; without it every event is sent. The
   contract defines two events: `state`, `{"event": "state", "panels": [<panel state>, ...]}`
   (`router.publishState()`, all panels, or `router.publishPanel(id)`, one panel), and
-  `widget`, a user change to a widget (see [Widgets](#widgets)).
+  `widget`, a user change to a widget (see [Widgets](#widgets)). The third, `quitting`, is
+  described below.
+- **`quitting`** (contract 0.3, additive): `{"event": "quitting"}`. When an app terminates on
+  purpose (its own Quit menu item, ⌘Q, the `quit` verb: any `NSApplication` termination, not a
+  crash or a kill), the control server pushes it once to every subscriber, whatever its `events`
+  filter, as it stops (`HUDSocketServer.stop()`, which the app's `applicationWillTerminate` and
+  the server's own termination observer both reach; `HUDControlRouter.install()` arms it with
+  `farewellEvent`). The write is non-blocking and best effort: a subscriber that is not reading
+  is skipped, and termination is never delayed. Apps built on older HUDKit never send it, and
+  consumers must not depend on it. **MacHUD treats an app that sent `quitting` as quit by the
+  user: it is not relaunched** (a connection that closes without it is a crash).
 - The stream carries **changes only**: a subscriber sends `state` once to learn the current
   state (MacHUD does). Events may repeat an unchanged state; consumers must be idempotent.
 - The router publishes after every successful `panel` command. The app **must** call
@@ -858,7 +868,8 @@ What an app gets without writing any code for it (MacHUD's `docs/API.md` has the
   not listening yet are queued for **20 s**; sending one launches the app (without activating
   it). Apps in `apps.autoLaunch` are started with MacHUD and relaunched after an unexpected exit
   (after 2 s, then 4 s; it gives up after 3 launches, `lastError: "gave up ..."`); 60 s of uptime
-  resets the count. An app quit through `machud apps quit` (the `quit` verb) is not relaunched.
+  resets the count. An app quit through `machud apps quit` (the `quit` verb), or one that sent
+  [`quitting`](#subscribe-and-state-events) before it exited, is not relaunched.
 - **Placement.** Loadout slots and `apps.<id>.placement` place a panel with `panel frame` when it
   is cooperative (listening, and `verbs` empty or containing `frame`), otherwise through
   Accessibility (the window titled like the panel, else the app's main window).
@@ -975,6 +986,9 @@ Beyond the socket, a compliant app also:
 - [ ] reads `<REPO>_HOME`, `<REPO>_SOCKET`, `<REPO>_NO_HOTKEYS` (and is tested with
       `HUD_NO_ANNOUNCE=1`);
 - [ ] sets `router.menuProvider` and attaches `HUDStatusItemPolicy` (menu bar consolidation);
+- [ ] `--snapshot` (and `--snapshot-widgets`) serves no socket, announces nothing, registers no
+      hotkey and reads no token or other secret (run it with no isolation variables while the
+      app is running: the running app's socket must be untouched);
 - [ ] installs `HUDEditMenu` if it has text input;
 - [ ] handles `action drop` if any panel declares `acceptsFileDrop`;
 - [ ] registers a view for every `kind: widget` panel and sets `router.widgetHost`, if it has any;

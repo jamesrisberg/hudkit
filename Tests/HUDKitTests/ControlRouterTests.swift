@@ -52,6 +52,13 @@ final class ControlRouterTests: XCTestCase {
                                   manifest: HUDManifest(id: "dev.test", name: "Test", socket: "test"))
     }
 
+    func testInstallArmsTheQuittingEvent() {
+        XCTAssertNil(server.farewellEvent)
+        router.install()
+        XCTAssertEqual(server.farewellEvent, "quitting")
+        XCTAssertEqual(HUDControlRouter.quittingEvent, "quitting")
+    }
+
     private func call(_ verb: String, _ args: [String: String] = [:]) -> [String: Any] {
         var out: [String: Any]?
         router.handle(verb, args: args) { out = $0 }
