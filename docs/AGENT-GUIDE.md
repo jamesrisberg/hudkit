@@ -1024,6 +1024,12 @@ picture a particular state. Some apps add flags to pick what to picture (Scratch
 `--snapshot-mode compact`, Sift `--snapshot-mode`, `--drawer`); add your own the same way in
 `AppDelegate`.
 
+A snapshot run never starts the control socket (the template skips `control.start()`, the status
+item and the hotkey when `--snapshot` is given): a plain `--snapshot` with no isolation
+variables would otherwise take the running app's socket name and announce itself to MacHUD. Keep
+it that way when adding setup, and have the snapshot path build its model without reading
+tokens, keychains or other secrets.
+
 ## 7. Isolation: never disturb the user
 
 The user's real apps and MacHUD are running. A test instance must not take their socket, their

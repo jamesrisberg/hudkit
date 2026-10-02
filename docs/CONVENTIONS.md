@@ -111,8 +111,11 @@ In `Sources/<Product>/Resources/Info.plist`: `CFBundleExecutable` = `<Product>`,
 - **`--snapshot <path.png>`**: shows the main panel, writes a PNG of its content (over a dark
   stand-in for the glass, which needs Screen Recording to capture) and quits. For docs and UI
   checks. Extra flags that pick what to picture (`--select`, `--snapshot-mode`) are app-specific.
-  Launch it with the isolation variables set. (The template and MechaHUD quit; the other apps
-  keep running afterwards, see the list at the end.)
+  Launch it with the isolation variables set. A snapshot only draws: it serves no control
+  socket and so announces nothing, registers no hotkey, adds no menu bar item, and reads no
+  token or other secret (the app returns before that setup, or builds its model offline).
+  (The template and MechaHUD quit; the other apps keep running afterwards, see the list at the
+  end.)
 - **Settings** live in `<home>/preferences.json`, described by `settings.json`; values arrive
   as strings and are validated all-or-nothing before any is applied.
 
