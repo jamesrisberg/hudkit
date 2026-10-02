@@ -6,7 +6,7 @@ import Foundation
 /// ```json
 /// {"id": "clock", "title": "Clock", "symbol": "clock", "kind": "widget",
 ///  "widget": {"sizes": ["small", "medium"], "defaultSize": "small", "multiple": true,
-///             "refresh": 1, "settingsSchema": "clock.settings.json"}}
+///             "refresh": 1, "settingsSchema": "clock.widget.json"}}
 /// ```
 ///
 /// Every key is optional and decoding is lenient, so a newer manifest still loads: unknown

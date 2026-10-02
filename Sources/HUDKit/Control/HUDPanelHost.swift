@@ -188,13 +188,13 @@ public protocol HUDPanelHost: AnyObject {
 @MainActor
 public enum HUDPanelHostDefaults {
     /// The `HUDPanelWindow` whose `panelID` is `id`; else, for a host with a single panel, the
-    /// app's only visible `HUDPanelWindow`; else nil (nothing is claimed).
+    /// app's only visible `HUDPanelWindow` that is not a widget; else nil (nothing is claimed).
     public static func panelWindow(_ id: String, of host: HUDPanelHost) -> NSWindow? {
         guard let app = NSApp as NSApplication? else { return nil }  // no app yet (tests, tools)
         let windows = app.windows.compactMap { $0 as? HUDPanelWindow }
         if let tagged = windows.first(where: { $0.panelID == id }) { return tagged }
         guard host.panelStates.count == 1, host.panelStates.first?.id == id else { return nil }
-        let visible = windows.filter { $0.isVisible && $0.panelID == nil }
+        let visible = windows.filter { $0.isVisible && $0.panelID == nil && $0.behavior != .widget }
         return visible.count == 1 ? visible[0] : nil
     }
 

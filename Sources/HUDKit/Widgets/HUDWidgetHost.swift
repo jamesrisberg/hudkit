@@ -21,8 +21,8 @@ import SwiftUI
 /// | `create` | `instance= type= [size=] [frame=x,y,w,h] [layer=desktop\|float] [settings=<JSON object>]` | `{instance}` |
 /// | `update` | `instance= [size=] [frame=] [layer=] [settings=]` (settings replace) | `{instance}` |
 /// | `remove` | `instance=` | `{removed}` |
-/// | `list` (default) | | `{instances, editing, revealed, types}` |
-/// | `sync` | `instances=<JSON array of instance objects>` (replace all) | `{instances, rejected}` |
+/// | `list` (default, with no args) | | `{instances, editing, revealed, types}` |
+/// | `sync` | `instances=<JSON array of instance objects> [editing=on\|off] [revealed=on\|off]` (replace all, modes default off) | `{instances, rejected, droppedSettings, editing, revealed}` |
 /// | `edit` | `state=on\|off` or bare `on`/`off` | `{editing}` |
 /// | `reveal` | `state=on\|off` or bare `on`/`off` | `{revealed}` |
 /// | `schema` | `type=` | `{type, schema}`: the type's per-instance settings schema |
@@ -65,9 +65,18 @@ public final class HUDWidgetHost {
     private var registrations: [String: Registration] = [:]
     private var controllers: [String: WidgetController] = [:]
     private var order: [String] = []
+    private var workspaceObservers: [WorkspaceObservation] = []
 
     public init(manifest: HUDManifest? = HUDManifest.main, bundleURL: URL = Bundle.main.bundleURL) {
         self.manifest = manifest
+        // The window server can drop a window's every-Space membership (see `reassertAllSpaces`);
+        // waking and Space changes are when that shows, so widgets re-assert it then.
+        let center = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.activeSpaceDidChangeNotification] {
+            workspaceObservers.append(WorkspaceObservation(center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.repairSpaces() }
+            }))
+        }
         guard let manifest else { return }
         for panel in manifest.widgetPanels {
             schemas[panel.id] = HUDSettingsSchema.load(widget: panel.id, manifest: manifest, bundleURL: bundleURL)
@@ -78,10 +87,16 @@ public final class HUDWidgetHost {
 
     /// Registers the SwiftUI view for widget type `type` (a `kind: widget` panel id). `keyable`
     /// lets the widget's window take keyboard focus (text input); widgets otherwise never do.
+    /// Registering a type again replaces its view in the instances already placed.
     public func register<Content: View>(_ type: String, keyable: Bool = false,
                                         @ViewBuilder content: @escaping (HUDWidgetContext) -> Content) {
         if registrations[type] == nil { types.append(type) }
-        registrations[type] = Registration(keyable: keyable, content: { AnyView(content($0)) })
+        let registration = Registration(keyable: keyable, content: { AnyView(content($0)) })
+        registrations[type] = registration
+        for id in order {
+            guard let c = controllers[id], c.instance.type == type else { continue }
+            c.setContent(registration.content(c.context), keyable: keyable)
+        }
     }
 
     /// The type's manifest description; the defaults for a registered type the manifest does
@@ -99,10 +114,12 @@ public final class HUDWidgetHost {
 
     /// Handles one `widget` command (what the router calls).
     public func handle(_ args: [String: String]) -> [String: Any] {
-        let sub = args["action"]
+        let named = args["action"]
             ?? args["_"].flatMap { Self.subVerbs.contains($0) ? $0 : nil }
             ?? Self.subVerbs.first { args[$0] != nil }
-            ?? "list"
+        // Only a bare `widget` lists; args without a sub-verb are a mistake (a `sync` that lost
+        // its action must not look like it worked).
+        let sub = named ?? (args.isEmpty ? "list" : "")
         do {
             switch sub {
             case "create": return try create(args)
@@ -139,7 +156,7 @@ public final class HUDWidgetHost {
         guard let type = args["type"], !type.isEmpty else { throw HUDControlError.invalid("widget create needs type=") }
         var fields: [String: Any] = ["instance": id, "type": type]
         for key in ["size", "frame", "layer", "settings"] { fields[key] = args[key] }
-        let instance = try validated(fields, among: instances)
+        let instance = try validated(fields, among: instances).instance
         place(instance)
         return ["ok": true, "instance": instance.json]
     }
@@ -162,7 +179,7 @@ public final class HUDWidgetHost {
         if let raw = args["frame"] { next.frame = try HUDWidgetInstance.parseFrame(raw) }
         if let raw = args["layer"] { next.layer = try HUDWidgetInstance.parseLayer(raw) }
         if let raw = args["settings"] { next.settings = try HUDWidgetInstance.parseSettings(raw, schema: schemas[current.type]) }
-        controllers[id]?.apply(next, editing: isEditing, revealed: isRevealed)
+        place(next)
         return ["ok": true, "instance": next.json]
     }
 
@@ -171,12 +188,18 @@ public final class HUDWidgetHost {
         guard let list = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [Any] else {
             throw HUDControlError.invalid("instances must be a JSON array")
         }
+        // Edit and reveal are part of the state a sync restores: MacHUD may have quit mid-edit.
+        let editing = try args["editing"].map { try Self.bool($0, name: "editing") } ?? false
+        let revealed = try args["revealed"].map { try Self.bool($0, name: "revealed") } ?? false
         var accepted: [HUDWidgetInstance] = []
         var rejected: [[String: Any]] = []
+        var dropped: [[String: Any]] = []
         for entry in list {
             let fields = entry as? [String: Any] ?? [:]
             do {
-                accepted.append(try validated(fields, among: accepted))
+                let (instance, bad) = try validated(fields, among: accepted, lenientSettings: true)
+                accepted.append(instance)
+                dropped += bad.map { ["instance": instance.id, "key": $0.key, "error": $0.error] }
             } catch {
                 var r: [String: Any] = ["error": "\(error)"]
                 if let id = fields["instance"] as? String { r["instance"] = id }
@@ -186,25 +209,31 @@ public final class HUDWidgetHost {
         let keep = Set(accepted.map(\.id))
         for id in order where !keep.contains(id) { remove(id) }
         order = []
+        isEditing = editing
+        isRevealed = revealed
         for instance in accepted { place(instance) }
-        return ["ok": true, "instances": accepted.map(\.json), "rejected": rejected]
+        return ["ok": true, "instances": accepted.map(\.json), "rejected": rejected, "droppedSettings": dropped,
+                "editing": isEditing, "revealed": isRevealed]
     }
 
     /// An instance from wire fields (strings from args, JSON values from `sync`), checked
-    /// against the registered types and the instances it would join.
-    private func validated(_ fields: [String: Any], among others: [HUDWidgetInstance]) throws -> HUDWidgetInstance {
+    /// against the registered types and the instances it would join. With `lenientSettings`, a
+    /// setting the schema rejects is dropped and returned instead of failing the instance.
+    private func validated(_ fields: [String: Any], among others: [HUDWidgetInstance], lenientSettings: Bool = false) throws
+        -> (instance: HUDWidgetInstance, droppedSettings: [(key: String, error: String)]) {
         guard let id = fields["instance"] as? String, !id.isEmpty else { throw HUDControlError.invalid("widget needs instance") }
         guard let type = fields["type"] as? String, !type.isEmpty else { throw HUDControlError.invalid("widget needs type") }
         guard let spec = spec(for: type) else { throw unknownType(type) }
         let size = try (fields["size"] as? String).map { try Self.size($0, spec: spec, type: type) } ?? spec.defaultSize
         let frame = try fields["frame"].map(HUDWidgetInstance.parseFrame) ?? Self.defaultFrame(size)
         let layer = try (fields["layer"] as? String).map(HUDWidgetInstance.parseLayer) ?? .desktop
-        let settings = try fields["settings"].map { try HUDWidgetInstance.parseSettings($0, schema: schemas[type]) } ?? [:]
+        let parsed = try fields["settings"].map { try HUDWidgetInstance.parseSettings($0, schema: schemas[type], lenient: lenientSettings) }
         if others.contains(where: { $0.id == id }) { throw HUDControlError.invalid("widget \(id) exists") }
         if !spec.multiple, others.contains(where: { $0.type == type }) {
             throw HUDControlError.invalid("\(type) allows one instance")
         }
-        return HUDWidgetInstance(id: id, type: type, size: size, frame: frame, layer: layer, settings: settings)
+        return (HUDWidgetInstance(id: id, type: type, size: size, frame: frame, layer: layer, settings: parsed?.settings ?? [:]),
+                parsed?.dropped ?? [])
     }
 
     private func unknownType(_ type: String) -> HUDControlError {
@@ -219,12 +248,21 @@ public final class HUDWidgetHost {
         return size
     }
 
-    /// Where a widget goes when nobody said: its nominal size, centred on the main screen.
+    /// Where a widget goes when nobody said: its nominal size, centred on the primary display
+    /// (the one with the menu bar; `NSScreen.main` would follow the key window).
     private static func defaultFrame(_ size: HUDWidgetSize) -> CGRect {
         let points = size.points()
-        let screen = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let screen = NSScreen.screens.first?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         return CGRect(x: (screen.midX - points.width / 2).rounded(), y: (screen.midY - points.height / 2).rounded(),
                       width: points.width, height: points.height)
+    }
+
+    private static func bool(_ raw: String, name: String) throws -> Bool {
+        switch raw.lowercased() {
+        case "on", "true", "1", "yes": return true
+        case "off", "false", "0", "no": return false
+        default: throw HUDControlError.invalid("\(name) must be on or off")
+        }
     }
 
     private static func onOff(_ args: [String: String], verb: String) throws -> Bool {
@@ -244,10 +282,12 @@ public final class HUDWidgetHost {
 
     // MARK: - Instances and windows
 
-    /// Creates the instance's window, or updates the existing one with the same id.
+    /// Creates the instance's window, or updates the existing one with the same id, and
+    /// (re)shows it with its every-Space membership re-asserted.
     private func place(_ instance: HUDWidgetInstance) {
         if let existing = controllers[instance.id], existing.instance.type == instance.type {
             existing.apply(instance, editing: isEditing, revealed: isRevealed)
+            existing.show(presenting: presentsWindows)
         } else {
             if controllers[instance.id] != nil { remove(instance.id) }
             guard let registration = registrations[instance.type], let spec = spec(for: instance.type) else { return }
@@ -257,7 +297,7 @@ public final class HUDWidgetHost {
                                               content: registration.content(context), host: self)
             controllers[instance.id] = controller
             controller.apply(instance, editing: isEditing, revealed: isRevealed)
-            if presentsWindows { controller.window.orderFrontRegardless() }
+            controller.show(presenting: presentsWindows)
         }
         if !order.contains(instance.id) { order.append(instance.id) }
     }
@@ -265,6 +305,12 @@ public final class HUDWidgetHost {
     private func remove(_ id: String) {
         controllers.removeValue(forKey: id)?.close()
         order.removeAll { $0 == id }
+    }
+
+    /// Re-asserts every widget window's every-Space membership and orders it in. Runs on wake
+    /// and on every Space change; idempotent.
+    func repairSpaces() {
+        for id in order { controllers[id]?.show(presenting: presentsWindows) }
     }
 
     private func setEditing(_ on: Bool) {
@@ -365,6 +411,7 @@ final class WidgetController {
     let context: HUDWidgetContext
     let window: HUDPanelWindow
     private let hosting: NSHostingView<HUDWidgetRootView>
+    private let actions: HUDWidgetRootView.Actions
     private var moveObserver: NSObjectProtocol?
     private var pendingMove: DispatchWorkItem?
 
@@ -382,6 +429,7 @@ final class WidgetController {
             dragged: { [weak host, weak window = window] in
                 if let frame = window?.frame { host?.userMoved(id, to: frame) }
             })
+        self.actions = actions
         let spec = context.spec
         hosting = NSHostingView(rootView: HUDWidgetRootView(context: context, content: content,
                                                             canResize: spec.sizes.count > 1,
@@ -424,6 +472,21 @@ final class WidgetController {
         if context.layer != next.layer { context.layer = next.layer }
         if context.settings != next.settings { context.settings = next.settings }
         if context.isEditing != editing { context.isEditing = editing }
+    }
+
+    /// Re-asserts the widget Spaces behaviour (the window server can drop it) and, when
+    /// presenting, orders the window in.
+    func show(presenting: Bool) {
+        window.reassertAllSpaces(HUDPanelWindow.widgetCollectionBehavior)
+        if presenting { window.orderFrontRegardless() }
+    }
+
+    /// A re-registered type's view.
+    func setContent(_ content: AnyView, keyable: Bool) {
+        window.keyable = keyable
+        let spec = context.spec
+        hosting.rootView = HUDWidgetRootView(context: context, content: content, canResize: spec.sizes.count > 1,
+                                             canConfigure: context.schema != nil, actions: actions)
     }
 
     func close() {
@@ -520,4 +583,15 @@ private struct WidgetDragSurface: NSViewRepresentable {
             if window.frame != before { onDragEnd?() }
         }
     }
+}
+
+/// A block observer on NSWorkspace's notification center, removed when released.
+private final class WorkspaceObservation: @unchecked Sendable {
+    private let center: NotificationCenter
+    private let token: NSObjectProtocol
+    init(_ center: NotificationCenter, _ token: NSObjectProtocol) {
+        self.center = center
+        self.token = token
+    }
+    deinit { center.removeObserver(token) }
 }

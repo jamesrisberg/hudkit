@@ -56,6 +56,7 @@ public final class HUDControlRouter {
     /// user changes (`onEvent`) to subscribers as `{"event": "widget", ...}`.
     public var widgetHost: HUDWidgetHost? {
         didSet {
+            if oldValue !== widgetHost { oldValue?.onEvent = nil }
             widgetHost?.onEvent = { [weak server] payload in server?.publish("widget", payload: payload) }
         }
     }
