@@ -69,6 +69,14 @@ public final class HUDWidgetContext: ObservableObject {
         host?.contextChangedSettings(self)
     }
 
+    /// Asks MacHUD to show this instance's settings: the event the edit-mode settings control
+    /// reports (`change: configure`), for a button inside the widget ("Set a place"). MacHUD
+    /// shows the instance's settings and answers with `update settings=`; nothing changes here
+    /// until it does.
+    public func configure() {
+        host?.requestConfigure(instance)
+    }
+
     /// Opens the app for this widget (a tap on a calendar event, "more…"): calls the host's
     /// `onOpen`, or, when the app set none, reports `change: open` so MacHUD can summon the
     /// app's panel.

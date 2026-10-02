@@ -364,6 +364,17 @@ final class WidgetHostTests: XCTestCase {
         XCTAssertEqual(events.count, 3)
     }
 
+    func testContextConfigureEmitsTheGearEvent() throws {
+        create("a")
+        let ctx = try XCTUnwrap(host.context(for: "a"))
+        ctx.configure()
+        XCTAssertEqual(events.count, 1)
+        XCTAssertEqual(events.last?["change"] as? String, "configure")
+        XCTAssertEqual(events.last?["instance"] as? String, "a")
+        XCTAssertEqual(events.last?["type"] as? String, "clock")
+        XCTAssertNotNil(host.instance("a"), "MacHUD answers; the app changes nothing itself")
+    }
+
     func testContextSettingsChangeAppliesAndEmits() throws {
         create("a", extra: ["settings": #"{"zone": "UTC"}"#])
         let ctx = try XCTUnwrap(host.context(for: "a"))
