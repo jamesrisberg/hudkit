@@ -222,17 +222,12 @@ open class HUDPanelWindow: NSPanel {
 
     /// Every order-in of a hover window (`orderFrontRegardless`, `orderFront`,
     /// `makeKeyAndOrderFront`, HUDAnimation, `activateOnShow`) first re-asserts the hover
-    /// Spaces behaviour. On 2026-10-01 four apps' hover panels were found on one desktop only:
-    /// the window server had dropped their all-Spaces (sticky) membership while AppKit still
-    /// held `.canJoinAllSpaces`, and AppKit's setter skips an unchanged value, so no show ever
-    /// repaired it. Taking `.canJoinAllSpaces` out and putting it back makes AppKit send it
-    /// again. Returns whether this is a hover show to finish after ordering in.
+    /// Spaces behaviour (`reassertAllSpaces`). Returns whether this is a hover show to finish
+    /// after ordering in.
     private func prepareHoverShow() -> Bool {
         guard behavior == .hover, !movingToActiveSpace else { return false }
         guard reassertsSpacesOnShow else { return true }
-        let target = Self.hoverCollectionBehavior(keeping: collectionBehavior)
-        collectionBehavior = target.subtracting(.canJoinAllSpaces)
-        collectionBehavior = target
+        reassertAllSpaces(Self.hoverCollectionBehavior(keeping: collectionBehavior))
         return true
     }
 
@@ -268,8 +263,7 @@ open class HUDPanelWindow: NSPanel {
         super.order(.out, relativeTo: 0)
         collectionBehavior = hover.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
         super.orderFrontRegardless()
-        collectionBehavior = hover.subtracting(.canJoinAllSpaces)
-        collectionBehavior = hover
+        reassertAllSpaces(hover)
         return true
     }
 
@@ -291,6 +285,18 @@ open class HUDPanelWindow: NSPanel {
     /// `anchorUnderNotch(size:geometry:)` reading live geometry off `screen`.
     public func anchorUnderNotch(size: CGSize, on screen: NSScreen) {
         anchorUnderNotch(size: size, geometry: HUDNotchGeometry(screen: screen))
+    }
+}
+
+extension NSWindow {
+    /// Sets `behavior` (which includes `.canJoinAllSpaces`) so the window server is sure to
+    /// hear it. The window server can drop a window's all-Spaces membership while AppKit still
+    /// holds `.canJoinAllSpaces`, and AppKit's setter skips an unchanged value, so assigning the
+    /// same behaviour would not repair it; taking `.canJoinAllSpaces` out and putting it back
+    /// makes AppKit send it again. Windows meant to be on every Space call this on every order-in.
+    func reassertAllSpaces(_ behavior: NSWindow.CollectionBehavior) {
+        collectionBehavior = behavior.subtracting(.canJoinAllSpaces)
+        collectionBehavior = behavior
     }
 }
 
