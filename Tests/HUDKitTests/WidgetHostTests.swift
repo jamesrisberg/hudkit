@@ -33,6 +33,7 @@ final class WidgetHostTests: XCTestCase {
         host.onEvent = { [unowned self] in self.events.append($0) }
     }
 
+    @discardableResult
     private func call(_ args: [String: String]) -> [String: Any] { host.handle(args) }
 
     @discardableResult
@@ -122,6 +123,16 @@ final class WidgetHostTests: XCTestCase {
         XCTAssertEqual(error(call(["action": "create", "instance": "w2", "type": "weather"])), "weather allows one instance")
     }
 
+    func testFrameTakesTheJSONFormsListAndSyncProduce() throws {
+        // The socket turns an array arg into its JSON text, so `frame: [x, y, w, h]` arrives as "[x,y,w,h]".
+        XCTAssertEqual(create("a", frame: "[10,20,170,170]")["ok"] as? Bool, true)
+        XCTAssertEqual(host.instance("a")?.frame, CGRect(x: 10, y: 20, width: 170, height: 170))
+        XCTAssertEqual(call(["action": "update", "instance": "a", "frame": #"{"x":1,"y":2,"w":170,"h":170}"#])["ok"] as? Bool, true)
+        XCTAssertEqual(host.instance("a")?.frame, CGRect(x: 1, y: 2, width: 170, height: 170))
+        XCTAssertEqual(error(create("b", frame: "[1,2]")), "frame must be x,y,w,h")
+        XCTAssertEqual(error(create("b", frame: "[1,2,3")), "frame must be x,y,w,h")
+    }
+
     func testSettingsAreTypedByTheSchemaAndUnknownKeysKept() throws {
         create("a", extra: ["settings": #"{"seconds": "on", "scale": 2, "extra": "kept"}"#])
         XCTAssertEqual(host.instance("a")?.settings,
@@ -136,7 +147,10 @@ final class WidgetHostTests: XCTestCase {
         XCTAssertEqual(call(HUDSocketClient.parseArguments(["edit", "on"]))["editing"] as? Bool, true)
         XCTAssertEqual(call(HUDSocketClient.parseArguments(["edit", "off"]))["editing"] as? Bool, false)
         XCTAssertEqual(call(HUDSocketClient.parseArguments(["remove", "instance=a"]))["ok"] as? Bool, true)
-        XCTAssertEqual(call([:])["ok"] as? Bool, true, "no sub-verb lists")
+        XCTAssertEqual(call([:])["ok"] as? Bool, true, "no sub-verb and no args lists")
+        XCTAssertEqual(error(call(["instances": "[]"])),
+                       "widget action must be one of create, update, remove, list, sync, edit, reveal, schema",
+                       "args without a sub-verb are a mistake, not a list")
         XCTAssertEqual(error(call(["action": "explode"])),
                        "widget action must be one of create, update, remove, list, sync, edit, reveal, schema")
     }
@@ -159,12 +173,15 @@ final class WidgetHostTests: XCTestCase {
         XCTAssertEqual(host.context(for: "a")?.layer, .float)
 
         // size alone keeps the top-left corner and takes the nominal size
-        XCTAssertEqual(call(["action": "update", "instance": "a", "size": "small"])["ok"] as? Bool, true)
-        XCTAssertEqual(host.instance("a")?.frame, CGRect(x: 100, y: 200, width: 170, height: 170).offsetBy(dx: 0, dy: 0))
+        call(["action": "create", "instance": "w", "type": "weather", "frame": "10,500,356,170"])
+        XCTAssertEqual(call(["action": "update", "instance": "w", "size": "large"])["ok"] as? Bool, true)
+        XCTAssertEqual(host.instance("w")?.frame, CGRect(x: 10, y: 314, width: 356, height: 356), "top edge stays at 670")
+        XCTAssertEqual(host.window(for: "w")?.frame, host.instance("w")?.frame)
+        XCTAssertTrue(events.isEmpty, "MacHUD's own updates do not echo events")
 
         XCTAssertEqual(error(call(["action": "update", "instance": "zz", "layer": "float"])), "no such widget zz")
         XCTAssertEqual(error(call(["action": "update", "instance": "a", "size": "large"])), "clock size must be one of small, medium")
-        XCTAssertEqual(host.instance("a")?.size, .small, "a failed update changes nothing")
+        XCTAssertEqual(host.instance("a")?.size, .medium, "a failed update changes nothing")
         XCTAssertEqual(error(call(["action": "update", "instance": "a", "settings": #"{"scale": 0}"#])), "scale must be at least 0.5")
     }
 
@@ -220,6 +237,38 @@ final class WidgetHostTests: XCTestCase {
         XCTAssertEqual(error(call(["action": "sync"])), "widget sync needs instances=<JSON array>")
         XCTAssertEqual(call(["action": "sync", "instances": "[]"])["ok"] as? Bool, true)
         XCTAssertTrue(host.instances.isEmpty)
+    }
+
+    func testSyncRestoresEditAndRevealState() throws {
+        create("a")
+        call(["action": "edit", "state": "on"])
+        call(["action": "reveal", "state": "on"])
+        let r = call(["action": "sync", "instances": #"[{"instance": "a", "type": "clock"}]"#])
+        XCTAssertEqual(r["editing"] as? Bool, false, "a sync without editing= ends edit mode (MacHUD restarted mid-edit)")
+        XCTAssertEqual(r["revealed"] as? Bool, false)
+        XCTAssertFalse(host.isEditing)
+        XCTAssertFalse(host.isRevealed)
+        XCTAssertFalse(host.window(for: "a")?.isMovable ?? true)
+        XCTAssertEqual(host.window(for: "a")?.level, HUDPanelWindow.widgetDesktopLevel)
+
+        let on = call(["action": "sync", "instances": "[]", "editing": "on", "revealed": "true"])
+        XCTAssertEqual(on["editing"] as? Bool, true)
+        XCTAssertEqual(on["revealed"] as? Bool, true)
+        XCTAssertTrue(host.isEditing)
+        XCTAssertEqual(error(call(["action": "sync", "instances": "[]", "editing": "maybe"])), "editing must be on or off")
+        XCTAssertTrue(host.isEditing, "a failed sync changes nothing")
+    }
+
+    func testSyncDropsOnlyTheBadSettings() throws {
+        let r = call(["action": "sync", "instances": #"[{"instance": "a", "type": "clock", "settings": {"scale": 9, "zone": "UTC", "seconds": "maybe"}}]"#])
+        XCTAssertEqual(host.instance("a")?.settings, ["zone": .string("UTC")], "the instance survives without the bad keys")
+        XCTAssertEqual((r["rejected"] as? [Any])?.count, 0)
+        let dropped = try XCTUnwrap(r["droppedSettings"] as? [[String: Any]])
+        XCTAssertEqual(dropped.map { $0["instance"] as? String }, ["a", "a"])
+        XCTAssertEqual(dropped.map { $0["key"] as? String }, ["scale", "seconds"])
+        XCTAssertEqual(dropped.map { $0["error"] as? String }, ["scale must be at most 2", "seconds must be true or false"])
+        XCTAssertEqual(error(create("b", extra: ["settings": #"{"scale": 9}"#])), "scale must be at most 2", "create stays strict")
+        XCTAssertTrue(events.isEmpty, "sync does not echo events")
     }
 
     func testSyncHonoursMultipleFalse() {
@@ -362,11 +411,73 @@ final class WidgetHostTests: XCTestCase {
             if obj["event"] as? String == "widget", obj["change"] as? String == "frame", obj["instance"] as? String == "a" { got.fulfill() }
         })
         defer { sub.cancel() }
+        // Over the socket, as MacHUD sends it: frame as a JSON array, settings as an object.
         var created: [String: Any]?
-        router.handle("widget", args: ["action": "create", "instance": "a", "type": "clock"]) { created = $0 }
-        XCTAssertEqual(created?["ok"] as? Bool, true)
+        DispatchQueue.global().async {
+            let r = try? client.request("widget", args: ["action": "create", "instance": "a", "type": "clock",
+                                                         "frame": [5, 6, 170, 170], "settings": ["zone": "UTC"]])
+            DispatchQueue.main.async { created = r }
+        }
+        let deadline = Date().addingTimeInterval(5)
+        while created == nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        XCTAssertEqual(created?["ok"] as? Bool, true, "\(created ?? [:])")
+        XCTAssertEqual(widgets.instance("a")?.frame, CGRect(x: 5, y: 6, width: 170, height: 170))
+        XCTAssertEqual(widgets.instance("a")?.settings, ["zone": .string("UTC")])
         widgets.userMoved("a", to: CGRect(x: 1, y: 2, width: 170, height: 170))
         wait(for: [got], timeout: 5)
+
+        let other = HUDWidgetHost(manifest: Self.manifest)
+        router.widgetHost = other
+        XCTAssertNil(widgets.onEvent, "the replaced host no longer publishes through the router")
+        XCTAssertNotNil(other.onEvent)
+    }
+
+    func testWindowsAreReleasedAfterRemoveAndSync() {
+        weak var removed: HUDPanelWindow?
+        weak var synced: HUDPanelWindow?
+        autoreleasepool {
+            create("a")
+            create("b")
+            removed = host.window(for: "a")
+            synced = host.window(for: "b")
+            call(["action": "remove", "instance": "a"])
+            call(["action": "sync", "instances": "[]"])
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        XCTAssertNil(removed, "a removed widget's window is released")
+        XCTAssertNil(synced, "a widget dropped by sync is released")
+    }
+
+    func testReRegisteringATypeRefreshesItsWindows() {
+        create("a")
+        var built: [String] = []
+        host.register("clock", keyable: true) { ctx in
+            built.append(ctx.instance)
+            return Text("v2")
+        }
+        XCTAssertEqual(built, ["a"], "existing instances take the new view")
+        XCTAssertTrue(host.window(for: "a")?.canBecomeKey ?? false, "and the new keyable")
+        XCTAssertEqual(host.types, ["clock", "weather"], "registration order unchanged")
+    }
+
+    func testPlacingRepairsEverySpaceMembership() throws {
+        create("a")
+        let w = try XCTUnwrap(host.window(for: "a"))
+        w.collectionBehavior = []   // what the window server losing it looks like after a lost reassert
+        call(["action": "update", "instance": "a", "layer": "float"])
+        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior, "update repairs")
+        w.collectionBehavior = []
+        call(["action": "sync", "instances": #"[{"instance": "a", "type": "clock"}]"#])
+        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior, "sync repairs")
+        w.collectionBehavior = []
+        host.repairSpaces()
+        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior, "wake / Space change repairs")
+    }
+
+    func testDefaultFrameIsOnThePrimaryDisplay() throws {
+        call(["action": "create", "instance": "w", "type": "weather"])
+        let primary = try XCTUnwrap(NSScreen.screens.first).visibleFrame
+        XCTAssertTrue(primary.contains(try XCTUnwrap(host.instance("w")).frame))
     }
 
     // MARK: - Window recipe

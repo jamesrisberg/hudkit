@@ -376,4 +376,17 @@ final class HUDPanelWindowActiveSpaceReportTests: XCTestCase {
         extra.orderFrontRegardless()
         XCTAssertNil(call(router, "panel", ["id": "only", "action": "show"])["onActiveSpace"], "ambiguous: not reported")
     }
+
+    func testWidgetWindowsAreNeverTakenForAPanel() {
+        NSApp.windows.filter { $0 is HUDPanelWindow && $0.isVisible }.forEach { $0.orderOut(nil) }
+        let host = SinglePanelHost(window: panel())
+        let router = HUDControlRouter(host: host, server: server)
+        let widget = HUDPanelWindow(contentRect: CGRect(x: 0, y: 0, width: 170, height: 170), behavior: .widget)
+        widget.orderFrontRegardless()
+        defer { widget.orderOut(nil) }
+        XCTAssertEqual(call(router, "panel", ["id": "only", "action": "show"])["onActiveSpace"] as? Bool, true,
+                       "a visible widget window does not make the app's one panel ambiguous")
+        host.window.orderOut(nil)
+        XCTAssertNil(HUDPanelHostDefaults.panelWindow("only", of: host), "nor stands in for it")
+    }
 }

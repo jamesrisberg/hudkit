@@ -51,9 +51,16 @@ public struct HUDWidgetInstance: Equatable, Sendable {
     // MARK: - Wire parsing (shared by the verb's args and `sync`'s JSON)
 
     /// A frame from `[x, y, w, h]`, `"x,y,w,h"` or `{"x", "y", "w", "h"}`, with a positive size.
+    /// The JSON forms may also arrive as their text (the socket turns an array or object arg
+    /// into JSON text).
     static func parseFrame(_ value: Any) throws -> CGRect {
         var rect: CGRect?
-        if let s = value as? String {
+        if let s = value as? String, let first = s.trimmingCharacters(in: .whitespaces).first, first == "[" || first == "{" {
+            guard let parsed = try? JSONSerialization.jsonObject(with: Data(s.utf8)) else {
+                throw HUDControlError.invalid("frame must be x,y,w,h")
+            }
+            return try parseFrame(parsed)
+        } else if let s = value as? String {
             rect = HUDPanelTransition.parseAnchor(s)
         } else if let a = value as? [Any], a.count == 4 {
             let n = a.compactMap { ($0 as? NSNumber)?.doubleValue }
@@ -82,8 +89,18 @@ public struct HUDWidgetInstance: Equatable, Sendable {
     }
 
     /// Settings from a JSON object (or its text), each value checked against `schema` when the
-    /// schema lists the key; other keys are kept unchecked (as `settings set` does).
+    /// schema lists the key; other keys are kept unchecked (as `settings set` does). Strict: the
+    /// first bad value throws.
     static func parseSettings(_ value: Any, schema: HUDSettingsSchema?) throws -> [String: HUDSettingValue] {
+        let (settings, dropped) = try parseSettings(value, schema: schema, lenient: false)
+        assert(dropped.isEmpty)
+        return settings
+    }
+
+    /// `parseSettings`, optionally lenient: a bad value drops only its key, returned with the
+    /// reason (`sync` restores what it can). A value that is not a JSON object still throws.
+    static func parseSettings(_ value: Any, schema: HUDSettingsSchema?, lenient: Bool) throws
+        -> (settings: [String: HUDSettingValue], dropped: [(key: String, error: String)]) {
         var object = value
         if let text = value as? String {
             guard let parsed = try? JSONSerialization.jsonObject(with: Data(text.utf8), options: [.fragmentsAllowed]) else {
@@ -93,13 +110,18 @@ public struct HUDWidgetInstance: Equatable, Sendable {
         }
         guard let dict = object as? [String: Any] else { throw HUDControlError.invalid("settings must be a JSON object") }
         var out: [String: HUDSettingValue] = [:]
+        var dropped: [(key: String, error: String)] = []
         for (key, raw) in dict.sorted(by: { $0.key < $1.key }) {
-            guard let value = HUDSettingValue(any: raw) else {
-                throw HUDControlError.invalid("\(key) must be a string, number or bool")
+            do {
+                guard let value = HUDSettingValue(any: raw) else {
+                    throw HUDControlError.invalid("\(key) must be a string, number or bool")
+                }
+                out[key] = try validate(key, value, schema: schema)
+            } catch where lenient {
+                dropped.append((key, "\(error)"))
             }
-            out[key] = try validate(key, value, schema: schema)
         }
-        return out
+        return (out, dropped)
     }
 
     static func validate(_ key: String, _ value: HUDSettingValue, schema: HUDSettingsSchema?) throws -> HUDSettingValue {
