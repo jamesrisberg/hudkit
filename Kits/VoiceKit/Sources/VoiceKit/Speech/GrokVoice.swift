@@ -47,10 +47,11 @@ public final class GrokVoice: PrefetchingSpeechVoice {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var completion: ((Result<Void, Error>) -> Void)?
-    /// A `prepare(_:completion:)` request in flight, tracked apart from `generation`/`task` so
-    /// it can run while a different clip plays (mirrors `KokoroVoice`).
-    private var prepareGeneration = UUID()
-    private var prepareTask: Task<Void, Never>?
+    /// `prepare(_:completion:)` requests in flight, tracked apart from `generation`/`task` so
+    /// they can run while a different clip plays (as in `KokoroVoice`). `stop()` replaces
+    /// `prepareEpoch`, so a request that outlives its cancellation never completes.
+    private var prepareEpoch = UUID()
+    private var prepareTasks: [UUID: Task<Void, Never>] = [:]
 
     public init(
         options: VoiceSettings.Grok = .init(),
@@ -144,30 +145,29 @@ public final class GrokVoice: PrefetchingSpeechVoice {
         }
     }
 
-    /// Fetches `text` without playing it, so it can be handed to `play(_:completion:)` once the
-    /// clip currently playing finishes. Runs independently of `speak`/`play`'s own generation,
-    /// so it can proceed while another clip plays; a newer `prepare` call, or `stop()`, cancels
-    /// an earlier one.
+    /// Fetches `text` without playing it, so it can be handed to `play(_:completion:)` once its
+    /// turn comes. Runs independently of `speak`/`play`'s own generation, so it can proceed
+    /// while another clip plays; several requests can be in flight, and `stop()` cancels them
+    /// all.
     public func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
-        prepareTask?.cancel()
-        let identity = UUID()
-        prepareGeneration = identity
+        let id = UUID()
+        let epoch = prepareEpoch
         let voice = options.voice
         let key = apiKey() ?? ""
-        prepareTask = Task { [weak self] in
+        prepareTasks[id] = Task { [weak self] in
             guard let self else { return }
             do {
                 let request = try Self.request(text: text, apiKey: key, voice: voice)
                 let audio = try await self.requester(request)
                 try Task.checkCancellation()
-                guard self.prepareGeneration == identity else { return }
+                guard self.prepareEpoch == epoch else { return }
                 guard !audio.isEmpty else { throw Failure.invalidResponse }
                 guard audio.count <= Self.maximumAudioBytes else { throw Failure.oversizedAudio }
-                self.prepareTask = nil
+                self.prepareTasks[id] = nil
                 completion(.success(SpeechClip(audio: audio)))
             } catch {
-                guard self.prepareGeneration == identity, !Task.isCancelled else { return }
-                self.prepareTask = nil
+                guard self.prepareEpoch == epoch, !Task.isCancelled else { return }
+                self.prepareTasks[id] = nil
                 completion(.failure((error as? Failure) ?? Failure.network))
             }
         }
@@ -197,9 +197,9 @@ public final class GrokVoice: PrefetchingSpeechVoice {
         task = nil
         completion = nil
         playback.stop()
-        prepareGeneration = UUID()
-        prepareTask?.cancel()
-        prepareTask = nil
+        prepareEpoch = UUID()
+        prepareTasks.values.forEach { $0.cancel() }
+        prepareTasks.removeAll()
     }
 
     private func finish(_ result: Result<Void, Error>, identity: UUID) {

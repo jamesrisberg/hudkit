@@ -24,7 +24,7 @@ Dependencies: [onnxruntime-swift-package-manager](https://github.com/microsoft/o
 |---|---|
 | Wake word | `WakeDetector`, `InProcessWakeDetector`, `WakeScoringEngine`, `OpenWakeWordEngine`, `WakeListener`, `WakeAudioSource`, `WakeDetection`, `WakeModel`, `WakeModels` |
 | Trigger phrases | `TriggerPhraseRegistry`, `TriggerPhrase`, `TriggerMatch`, `VoiceAction` |
-| Reply voices | `SpeechVoice`, `PrefetchingSpeechVoice`, `SpeechClip`, `SpeechVoiceKind`, `KokoroVoice`, `SystemVoice`, `GrokVoice`, `SpeechVoices`, `SpeechStreamer`, `SentenceSplitter`, `MarkdownSpeechFilter`, `KokoroEngine`, `KokoroModels` |
+| Reply voices | `SpeechVoice`, `PrefetchingSpeechVoice`, `SpeechClip`, `SpeechVoiceKind`, `KokoroVoice`, `SystemVoice`, `GrokVoice`, `SpeechVoices`, `SpeechStreamer`, `SpeechStreamMetrics`, `SpeechChunker`, `SentenceSplitter`, `MarkdownSpeechFilter`, `SpeechClock`, `SystemSpeechClock`, `KokoroEngine`, `KokoroModels` |
 | Models | `ModelManifest`, `ModelArtifact`, `ModelStore`, `ModelDownload` |
 | Settings | `VoiceSettings`, `VoiceSecretStoring`, `KeychainVoiceSecretStore`, `InMemoryVoiceSecretStore`, `VoiceSecrets` |
 
@@ -79,9 +79,12 @@ plain JSON list of `{phrase, action}`.
 
 `SpeechVoice` is one protocol for every voice: `speak(_:completion:)` replaces what is being
 said and completes once, never after `stop()` or a newer `speak`; `onSpeakingChanged` and
-`onLevel` (0...1) drive an indicator. A voice that can synthesize ahead of time also conforms
-to `PrefetchingSpeechVoice` (`prepare(_:completion:)` synthesizes a `SpeechClip` without
-playing it, `play(_:completion:)` plays one already prepared); a voice that cannot (like
+`onLevel` (0...1) drive an indicator; `warmUp()` gets the voice ready without playing anything
+(Kokoro loads its model and synthesizes a discarded word; other voices do nothing), returns at
+once when already warm, and may be called whenever a reply is expected. A voice that can
+synthesize ahead of time also conforms to `PrefetchingSpeechVoice` (`prepare(_:completion:)`
+synthesizes a `SpeechClip` without playing it, several at once if asked, all cancelled by
+`stop()`; `play(_:completion:)` plays one already prepared); a voice that cannot (like
 `SystemVoice`) just implements `SpeechVoice`.
 
 | Voice | Where it runs | Needs | Prefetch |
@@ -95,20 +98,58 @@ playing it, `play(_:completion:)` plays one already prepared); a voice that cann
 is not installed or there is no Grok key.
 
 `SpeechStreamer` speaks text that arrives in pieces: `append(_:)` each piece, `finish()` at the
-end. `SentenceSplitter` cuts complete sentences (at `.`, `!`, `?`, `…` followed by whitespace,
-or a line break; not after common abbreviations, initialisms such as "U.S.", a list number
-opening a sentence, or inside a decimal) and they are spoken in order, one at a time.
-`onFinished` reports the end or the first failure once; the stream then ignores more text
-until `stop()`, which also drops the queue. `MarkdownSpeechFilter` cleans each sentence before
-it is queued: heading and list markers are dropped, emphasis markers are removed (the
-emphasized words are kept), a link speaks its text, inline code is spoken as plain words, and
-a fenced code block (its lines and the fence lines themselves) is skipped entirely, never
-spoken. When `voice` conforms to `PrefetchingSpeechVoice`, the streamer prepares the next
-sentence while the current one plays and hands the clip to `play(_:completion:)` once it is
-this sentence's turn, falling back to `speak(_:completion:)` when the prefetch is not ready
-yet. `ClipPlayback` (the clip player behind `KokoroVoice` and `GrokVoice`) coalesces a `play()`
-that follows a clip's natural end into one uninterrupted span: `onSpeakingChanged` does not
-flicker false-then-true at a sentence boundary, only going false once nothing plays next.
+end. `SpeechChunker` cuts the text into chunks so speech starts before the first sentence is
+complete:
+
+- The first chunk ends at the first clause boundary (`,` `;` `:` `—` `–`; not "1,000",
+  "10:30" or "3–5") with at least 5 words before it, or at a word boundary once it has 12
+  words, or, when at least 3 words have waited 400 ms with no new text, with what has arrived:
+  all of it when it ends in sentence or clause punctuation, else up to the last space, since
+  the last word may still be arriving ("I fou" before "nd").
+- Every later chunk is a sentence (`SentenceSplitter`: `.`, `!`, `?`, `…` followed by
+  whitespace, or a line break; not after common abbreviations, initialisms such as "U.S.", a
+  list number opening a sentence, or inside a decimal). A sentence longer than 160 characters
+  is split at its last clause boundary within them; a run of 280 characters with no ending is
+  cut at a space.
+- A cut inside a sentence leaves at least 3 words on each side and never falls inside inline
+  markdown; a complete sentence is a chunk whatever its length ("Sure."). Only whole words
+  count: not a last word that may still be arriving, markdown markers ("##", "-") or a list
+  number.
+
+`SpeechChunker.Rules` holds those numbers. `MarkdownSpeechFilter` cleans each chunk before it is
+queued: heading and list markers are dropped, emphasis markers are removed (the emphasized
+words are kept), a link speaks its text, inline code is spoken as plain words, and a fenced
+code block (its lines and the fence lines themselves) is skipped entirely, never spoken; a chunk
+left with nothing to say is dropped. Chunks are spoken in order, one at a time. `onFinished`
+reports the end or the first failure once; the stream then ignores more text until `stop()`,
+which also drops the queue and cancels any synthesis in flight.
+
+When `voice` conforms to `PrefetchingSpeechVoice`, each chunk is synthesized as soon as it is
+queued, up to `prefetchDepth` (default 2) chunks ahead of the one playing, and played with
+`play(_:completion:)` when its turn comes: speech is gapless while text arrives faster than it
+is spoken, and when text is slower the voice pauses only between chunks. A voice that cannot
+prefetch speaks each chunk with `speak(_:completion:)`. `ClipPlayback` (the clip player behind
+`KokoroVoice` and `GrokVoice`) coalesces a `play()` that follows a clip's natural end into one
+uninterrupted span: `onSpeakingChanged` does not flicker false-then-true at a chunk boundary,
+only going false once nothing plays next.
+
+`onChunkStarted` and `onChunkFinished` report each spoken chunk as a `SpeechChunk`: its cleaned
+text, its index from 0 in the reply, and `rawRange`, its `Character` offsets in everything
+appended for the reply (markdown included), so a host can reveal the reply up to the end of the
+chunk being spoken. `warmUp()` passes through to the voice. A failure also stops the voice, so
+chunks still being synthesized ahead do not delay the next reply. Once per reply that received text (when it
+finishes, fails or is stopped) the streamer logs a `SpeechStreamMetrics` line under the app's
+subsystem, category `speech`, and passes it to `onMetrics`: the time from the first text to the
+first chunk queued and to the first chunk playing, the chunks played, and the underruns (a
+chunk ended with the next not ready) with their total silence, split into waiting for text and
+waiting for synthesis. Time comes from a `SpeechClock`,
+`SystemSpeechClock` unless the host or a test passes another.
+
+`KokoroVoice(modelDirectory:)` voices for one model folder share one `KokoroEngine`, so the
+model loads once and a voice made for each reply starts warm. It stays loaded until
+`KokoroVoice.unloadModels()`, which `SpeechVoices.make` calls whenever it builds a voice other
+than Kokoro. `KokoroVoice` hands its preparations to the model one at a time, in the order they
+were asked for.
 
 An app that ships `KokoroVoice` must carry MLX's Metal library and Misaki's lexicons:
 `hud-build.sh` copies the `mlx-swift_Cmlx.bundle` and `Misaki_Misaki.bundle` resource bundles
