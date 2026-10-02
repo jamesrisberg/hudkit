@@ -4,14 +4,24 @@ import Testing
 
 @testable import VoiceKit
 
+/// A synthesizer each call of which waits until the test finishes it. Like an in-flight GPU
+/// call, a cancelled call keeps waiting for its result; `cancelled` records that it was asked.
 private actor SynthesisGate {
     var calls: [(String, String, Double)] = []
     var pending: [CheckedContinuation<[Float], Error>] = []
+    private let cancellations = Locked<Set<Int>>([])
     func run(_ text: String, _ voice: String, _ speed: Double) async throws -> [Float] {
+        let index = calls.count
         calls.append((text, voice, speed))
-        return try await withCheckedThrowingContinuation { pending.append($0) }
+        let cancellations = cancellations
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { pending.append($0) }
+        } onCancel: {
+            cancellations.mutate { $0.insert(index) }
+        }
     }
     func count() -> Int { pending.count }
+    nonisolated func cancelled() -> Set<Int> { cancellations.value }
     func finish(_ index: Int, result: Result<[Float], Error>) { pending[index].resume(with: result) }
     func lastSpeed() -> Double? { calls.last?.2 }
     func texts() -> [String] { calls.map(\.0) }
@@ -220,33 +230,55 @@ struct KokoroVoiceTests {
         #expect(KokoroVoice.engine(for: folder) !== KokoroVoice.engine(for: URL(fileURLWithPath: "/models/other")))
     }
 
-    @Test func preparationsReachTheSynthesizerInOrderAndStopCancelsThemAll() async throws {
+    @Test func preparationsRunOneAtATimeInOrderAndStopCancelsThemAll() async throws {
+        struct Broken: Error {}
         let gate = SynthesisGate()
         let voice = KokoroVoice { try await gate.run($0, $1, $2) }
         var results: [String] = []
-        voice.prepare("one") { if (try? $0.get()) != nil { results.append("one") } }
-        voice.prepare("two") { if (try? $0.get()) != nil { results.append("two") } }
+        func prepare(_ text: String) {
+            voice.prepare(text) { results.append((try? $0.get()) == nil ? "\(text) failed" : text) }
+        }
+        func settle() async { for _ in 0..<100 { await Task.yield() } }
+
+        // Each preparation reaches the synthesizer only after the one before it has completed,
+        // whatever order the tasks involved happen to be scheduled in; a failure completes in
+        // its turn and the next one still runs.
+        prepare("one")
+        prepare("two")
+        prepare("three")
         while await gate.count() < 1 { await Task.yield() }
-        for _ in 0..<20 { await Task.yield() }
-        #expect(await gate.texts() == ["one"])  // "two" waits for "one"
-        await gate.finish(0, result: .success([0]))
+        await settle()
+        #expect(await gate.texts() == ["one"])
+        #expect(results.isEmpty)
+        // The first clip is the longest to encode; the shorter ones still complete after it.
+        await gate.finish(0, result: .success(Array(repeating: 0, count: 240_000)))
         while await gate.count() < 2 { await Task.yield() }
-        #expect(await gate.texts() == ["one", "two"])
-        await gate.finish(1, result: .success([0]))
-        try await eventually { results == ["one", "two"] }
-        voice.prepare("three") { _ in results.append("three") }
-        voice.prepare("four") { _ in results.append("four") }
+        #expect(results == ["one"])
+        await gate.finish(1, result: .failure(Broken()))
         while await gate.count() < 3 { await Task.yield() }
-        voice.stop()
+        #expect(results == ["one", "two failed"])
         await gate.finish(2, result: .success([0]))
-        for _ in 0..<20 { await Task.yield() }
-        #expect(results == ["one", "two"])
-        #expect(await gate.texts() == ["one", "two", "three"])  // "four" never started
-        // After a stop, a new preparation does not wait for the cancelled ones.
-        voice.prepare("five") { if (try? $0.get()) != nil { results.append("five") } }
+        while results.count < 3 { await Task.yield() }
+        #expect(results == ["one", "two failed", "three"])
+        #expect(await gate.texts() == ["one", "two", "three"])
+
+        // `stop()` cancels the synthesis in flight and drops the ones waiting behind it; the
+        // cancelled one never completes, even when its synthesis returns anyway.
+        prepare("four")
+        prepare("five")
         while await gate.count() < 4 { await Task.yield() }
+        voice.stop()
+        #expect(gate.cancelled() == [3])
+        // A preparation after the stop does not wait for the cancelled synthesis to return.
+        prepare("six")
+        while await gate.count() < 5 { await Task.yield() }
+        #expect(await gate.texts() == ["one", "two", "three", "four", "six"])
         await gate.finish(3, result: .success([0]))
-        try await eventually { results == ["one", "two", "five"] }
+        await gate.finish(4, result: .success([0]))
+        while results.count < 4 { await Task.yield() }
+        await settle()
+        #expect(results == ["one", "two failed", "three", "six"])
+        #expect(await gate.count() == 5)  // "five" never started
     }
 
     @Test func choosingAnotherVoiceUnloadsTheSharedKokoroModel() {
