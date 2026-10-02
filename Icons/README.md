@@ -28,6 +28,7 @@ Wormhole and Archibald keep their own icons.
 | `ffmpeghud.svg` | ffmpegHUD | `#FF6A3D` red-orange | a play triangle in a film-strip frame, two sprocket holes each side |
 | `magickhud.svg` | magickHUD | `#F472D0` magenta | a wand with a four-point sparkle at its tip |
 | `servershud.svg` | serversHUD | `#2DD4BF` teal | a rack of three server slabs, each with a lit dot |
+| `widgethud.svg` | widgetHUD | `#60A5FA` sky blue | a wide tile over two small ones: a board of widgets |
 | `template.svg` | new apps | `#9CA3AF` grey | a ring with a dot: the placeholder the app template ships |
 
 ## Rendering
