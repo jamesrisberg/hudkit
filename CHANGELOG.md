@@ -19,6 +19,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   restores an app's widgets after it relaunches), `edit`, `reveal` and `schema`; the user's
   changes come back as `widget` events. `HUDWidgetContext` gives a widget its instance, size,
   settings and edit state, lets it change its own settings and open its app.
+- `HUDWidgetContext.configure()`: a widget's own button can ask MacHUD to show the instance's
+  settings, the event the edit-mode settings control reports.
 - `HUDWidgetHost.writeSnapshot(type:size:settings:editing:to:)` renders a widget type to PNG.
 - `HUDPanelWindow.Behavior.widget`, `widgetDesktopLevel`, `widgetCollectionBehavior`.
 - `HUDManifest.dockPanels`, `widgetPanels`; `HUDSettingsSchema.load(widget:manifest:bundleURL:)`.
