@@ -14,12 +14,18 @@ import AppKit
 ///   apps' windows can cover it. `showsInDock` (default true) gives the app a Dock tile and a
 ///   ⌘-Tab entry while such a window is on screen (see `HUDDockPolicy`).
 ///
+/// - `.widget`: a desktop widget (see `HUDWidgetHost`, which makes these). Same glass look,
+///   borderless and non-activating, on every Space but stationary (Mission Control leaves it
+///   in place) and out of the ⌘` cycle, at `widgetDesktopLevel` (just above the desktop icons,
+///   below every app window) or `.floating`. Never key unless `keyable` (text input), never
+///   main, and not movable: `HUDWidgetHost` unlocks it in edit mode.
+///
 /// A window can switch behaviour at runtime with `applyHUDRecipe(behavior:)` (Sift's one
 /// window is the windowed browser in full mode and the hover dock strip in compact mode).
 /// HUDParking and HUDAnimation only move frames and alpha, so they work for both.
 open class HUDPanelWindow: NSPanel {
     public enum Behavior: String, Codable, Sendable {
-        case hover, windowed
+        case hover, windowed, widget
     }
 
     /// Set by `applyHUDRecipe`.
@@ -46,7 +52,7 @@ open class HUDPanelWindow: NSPanel {
     public static let windowedStyleMask: NSWindow.StyleMask = [.borderless, .fullSizeContentView]
 
     public static func styleMask(for behavior: Behavior) -> NSWindow.StyleMask {
-        behavior == .hover ? recipeStyleMask : windowedStyleMask
+        behavior == .windowed ? windowedStyleMask : recipeStyleMask
     }
 
     /// The hover recipe's Spaces behaviour: every Space, ignored by Mission Control, over full-screen apps.
@@ -89,7 +95,7 @@ open class HUDPanelWindow: NSPanel {
 
     /// Applies `behavior`'s recipe (to a panel made with a custom initializer, or to switch a
     /// panel's behaviour). `level` defaults to `.floating` for hover and `.normal` for
-    /// windowed. Other style mask bits (`.resizable`) are kept.
+    /// windowed and `widgetDesktopLevel` for widget. Other style mask bits (`.resizable`) are kept.
     public func applyHUDRecipe(behavior: Behavior, level: NSWindow.Level? = nil) {
         self.behavior = behavior
         switch behavior {
@@ -101,9 +107,13 @@ open class HUDPanelWindow: NSPanel {
             styleMask.remove(.nonactivatingPanel)
             collectionBehavior = Self.windowedCollectionBehavior
             animationBehavior = .documentWindow
+        case .widget:
+            styleMask.insert(.nonactivatingPanel)
+            collectionBehavior = Self.widgetCollectionBehavior
+            animationBehavior = .none
         }
-        setPreventsActivation(behavior == .hover)
-        self.level = level ?? (behavior == .hover ? .floating : .normal)
+        setPreventsActivation(behavior != .windowed)
+        self.level = level ?? Self.defaultLevel(for: behavior)
         styleMask.insert(.borderless)
         styleMask.insert(.fullSizeContentView)
         isOpaque = false
@@ -116,6 +126,7 @@ open class HUDPanelWindow: NSPanel {
         // themselves (text views, sliders) still win because they handle mouseDown first.
         isMovableByWindowBackground = true
         isMovable = true
+        if behavior == .widget { setWidgetLocked(true) }
         HUDDockPolicy.shared.update(self)
     }
 

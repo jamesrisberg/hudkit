@@ -1,6 +1,6 @@
 # The MacHUD app contract
 
-**Contract version 0.2** (HUDKit 0.2.0, `HUDKit.version`). This is the canonical spec of what a
+**Contract version 0.3** (HUDKit 0.3.0, `HUDKit.version`). This is the canonical spec of what a
 MacHUD app ships and serves, and what MacHUD does with it. Every statement here was checked
 against HUDKit's code (`Sources/HUDKit`) and MacHUD's (`~/dev/machud/Sources/MacHUDCore`); when
 another document disagrees, this one and the code win.
@@ -18,7 +18,7 @@ family app; **may** is optional.
 
 Contents: [Versioning](#versioning) · [Manifest](#manifest) · [Socket](#socket) ·
 [Verbs](#verbs) · [subscribe](#subscribe-and-state-events) · [Settings schema](#settings-schema) ·
-[docks.json](#docksjson) · [Behaviour](#behaviour-hover-and-windowed) · [File drops](#file-drops) ·
+[docks.json](#docksjson) · [Behaviour](#behaviour-hover-and-windowed) · [Widgets](#widgets) · [File drops](#file-drops) ·
 [Agent sessions](#agent-sessions) · [Text feed](#text-feed) ·
 [Launch announcement](#launch-announcement) · [Menu bar consolidation](#menu-bar-consolidation) ·
 [What MacHUD guarantees](#what-machud-guarantees) · [Compliance checklist](#compliance-checklist)
@@ -30,10 +30,14 @@ and `version`, the app's own (`CFBundleShortVersionString`, which `hud-build.sh`
 repo's `VERSION`). MacHUD gates contract features on `hudkit`, never on `version`. While HUDKit is
 0.x, a contract addition bumps the minor version and additive API or fixes bump the patch.
 
-Contract 0.1 is everything this document describes. What an app may leave out is marked
-**may** or optional where it appears (the `menu`/`menu-invoke` verbs, file drops, `mode` and
-`frame`); `showPanel(_:options:)` and `hidePanel(_:options:)` default to `showPanel(_:)` and
+What an app may leave out is marked **may** or optional where it appears (the `menu`/`menu-invoke`
+verbs, widgets, file drops, `mode` and `frame`); `showPanel(_:options:)` and `hidePanel(_:options:)` default to `showPanel(_:)` and
 `hidePanel(_:)`, so an app that ignores the dock's transition options needs no code for them.
+
+Contract 0.3 adds [widgets](#widgets): the `widget` panel kind and the `widget` verb. A reader
+built on HUDKit before 0.3 decodes `"kind": "widget"` as `windowed` and would offer the widget as
+a windowed app, so an app that serves widgets needs a MacHUD built on HUDKit 0.3 or later. From
+0.3 on, a kind the reader does not know is kept and ignored, never read as windowed.
 
 ## Manifest
 
@@ -80,7 +84,8 @@ copies it into the bundle.
 | `id` | string | yes | | The panel id used in every `panel` command (`id=`). MacHUD names it `<app id>/<panel id>` (`xyz.machud.tallyhud/main`). |
 | `title` | string | no | `id` | Display title. MacHUD also matches it against window titles when it has to move the window through Accessibility. |
 | `symbol` | string | no | none (MacHUD uses `app.dashed`) | SF Symbol for menus and the dock. |
-| `kind` | `"hover"` \| `"windowed"` | no | `"windowed"` | How the MacHUD tool dock presents it; see [Behaviour](#behaviour-hover-and-windowed). An unknown value reads as `windowed`. |
+| `kind` | `"hover"` \| `"windowed"` \| `"widget"` | no | `"windowed"` | How MacHUD presents it: hover and windowed panels get a tool dock button (see [Behaviour](#behaviour-hover-and-windowed)); a `widget` panel is a widget type MacHUD places on the desktop (see [Widgets](#widgets)). An unknown string is kept verbatim (`HUDManifest.Panel.Kind.unknown`), round-trips through `hello`, and is never shown; a missing or non-string value reads as `windowed`. |
+| `widget` | object | no | the defaults below | Only on `kind: widget` panels: the type's sizes, instances, refresh hint and per-instance settings schema ([Widgets](#widgets)). |
 | `order` | integer | no | none | Sort key within its `kind` group on the dock, ascending; panels without one come after those with one, in manifest order (`HUDManifest.dockSorted`). A non-integer is ignored. Family hover apps use 1-5; the template uses 90. |
 | `defaultSize` | `[width, height]` | no | none | Points. MacHUD uses it the first time it places or hover-shows the panel (else 420x480). |
 | `compactSize` | `[width, height]` | no | none | Size in `compact` mode, informational. |
@@ -126,9 +131,9 @@ Rules:
 - A connection that sends an empty line or hangs up without a line is closed without a reply
   (liveness probes).
 - A request line longer than 1,000,000 bytes is cut and answered as a malformed request.
-- **Args are strings.** The server converts every arg value with Swift string interpolation
-  before a handler sees it: `"x"` → `"x"`, `3` → `"3"`, `1.5` → `"1.5"`, `true` → `"1"`, `false`
-  → `"0"`, arrays and objects → an unspecified description. Send strings. Handlers receive
+- **Args are strings.** The server converts every arg value before a handler sees it: `"x"` →
+  `"x"`, `3` → `"3"`, `1.5` → `"1.5"`, `true` → `"1"`, `false` → `"0"`, and an array or object
+  → its compact JSON text (so `"settings": {"a": 1}` arrives as `{"a":1}`). Handlers receive
   `[String: String]`.
 - Handlers run on the **main thread**, one at a time. A handler that does not answer within
   90 s (`HUDSocketServer.handlerTimeout`) is answered `{"ok": false, "error": "timeout"}`.
@@ -149,16 +154,17 @@ Rules:
 
 ### Built-in `help`
 
-`{"command": "help"}` → `{"ok": true, "commands": ["action", "hello", "menu", "menu-invoke", "panel", "quit", "settings", "state"]}`:
-the registered handlers, sorted (HUDKit registers `menu` and `menu-invoke` in every app,
-answering `no menu` without a provider). `help` itself and `subscribe` are built into the server
+`{"command": "help"}` → `{"ok": true, "commands": ["action", "hello", "menu", "menu-invoke", "panel", "quit", "settings", "state", "widget"]}`:
+the registered handlers, sorted (HUDKit registers `menu`, `menu-invoke` and `widget` in every
+app, answering `no menu` / `no widgets` without a provider). `help` itself and `subscribe` are built into the server
 and are not listed.
 
 ## Verbs
 
 Required: `hello`, `panel`, `state`, `subscribe`, `settings`, `action`, `quit`
 (`HUDControlRouter.requiredVerbs`). Optional: `menu`, `menu-invoke`
-(`HUDControlRouter.optionalVerbs`, see [Menu bar consolidation](#menu-bar-consolidation)).
+(`HUDControlRouter.optionalVerbs`, see [Menu bar consolidation](#menu-bar-consolidation)) and
+`widget` (`HUDControlRouter.widgetVerb`, see [Widgets](#widgets)).
 `HUDControlRouter.install()` registers all of them on the server; `subscribe` is served by
 `HUDSocketServer` itself. An app may register more commands
 (`server.register("name") { args, done in ... }`), but app-specific operations belong under
@@ -171,7 +177,7 @@ Replies are shown with keys in a readable order.
 
 ```json
 {"command": "hello"}
-{"ok": true, "hudkit": "0.2.0", "app": "xyz.machud.tallyhud", "name": "TallyHUD", "version": "0.1.0",
+{"ok": true, "hudkit": "0.3.0", "app": "xyz.machud.tallyhud", "name": "TallyHUD", "version": "0.1.0",
  "panels": [{"id": "main", "title": "TallyHUD", "symbol": "number.circle", "kind": "hover", "order": 90,
              "defaultSize": [320, 160], "capabilities": ["acceptsFileDrop"],
              "verbs": ["show", "hide", "toggle", "frame", "mode", "say", "bump", "reset", "drop"],
@@ -186,7 +192,8 @@ Replies are shown with keys in a readable order.
 - `version` is absent outside a bundle (`swift run`).
 - `panels` is `host.panelDescriptors` (default: the bundle manifest's panels).
 - `verbs` is the seven required verbs, plus `menu` and `menu-invoke` when the app set
-  `router.menuProvider`; never the manifest's `verbs`.
+  `router.menuProvider`, plus `widget` when it set `router.widgetHost`; never the manifest's
+  `verbs`.
 - `statusItem` is present once the app attached a `HUDStatusItemPolicy` (`host` only while a
   `host.json` exists).
 
@@ -395,8 +402,9 @@ MacHUD's `apps quit` rely on it.
 - The connection stays open; the server pushes one line per published event until either side
   closes. Anything the client writes after the request is ignored.
 - `events=a,b` limits the stream to those event names; without it every event is sent. The
-  contract defines one event, `state`: `{"event": "state", "panels": [<panel state>, ...]}`
-  (`router.publishState()`, all panels, or `router.publishPanel(id)`, one panel).
+  contract defines two events: `state`, `{"event": "state", "panels": [<panel state>, ...]}`
+  (`router.publishState()`, all panels, or `router.publishPanel(id)`, one panel), and
+  `widget`, a user change to a widget (see [Widgets](#widgets)).
 - The stream carries **changes only**: a subscriber sends `state` once to learn the current
   state (MacHUD does). Events may repeat an unchanged state; consumers must be idempotent.
 - The router publishes after every successful `panel` command. The app **must** call
@@ -539,6 +547,193 @@ hover fades (Scratch and Sift fade a hover show in within 0.08 s and a hover hid
 A menu bar app has no main menu, so ⌘C/⌘V/⌘X/⌘A/⌘Z do nothing in its text fields. An app with
 any text input **must** call `HUDEditMenu.install(appName:)` at launch. MacHUD does not do this for
 other apps.
+
+## Widgets
+
+A **widget** is a small glass tile on the desktop that an app draws and MacHUD places. Any app
+may serve widget types next to its hover or windowed panels (serversHUD's running servers, a
+clock), and an app may serve only widgets. Contract 0.3; the app side is `HUDWidgetHost`.
+
+- A **type** is one manifest panel with `"kind": "widget"`; its `id` is the type name.
+- An **instance** is one placed widget: MacHUD's id, a type, a size, a frame, a layer and its
+  own settings. A type may be placed several times, each instance with its own settings.
+- **MacHUD owns the instance records**: it persists them, sends them to the app, and receives
+  the user's changes as events. The app keeps instances in memory only and renders them.
+
+### Manifest
+
+```json
+{"id": "clock", "title": "Clock", "symbol": "clock", "kind": "widget",
+ "widget": {"sizes": ["small", "medium"], "defaultSize": "small", "multiple": true,
+            "refresh": 1, "settingsSchema": "clock.widget.json"}}
+```
+
+| `widget` key | Type | Default | Meaning |
+|---|---|---|---|
+| `sizes` | array of size names | `[defaultSize]`, else `["small"]` | The sizes the type can be placed at, in order (the edit-mode resize control cycles through them). Unknown names are skipped. |
+| `defaultSize` | size name | the first of `sizes` | A new instance's size; a value not in `sizes` reads as the first. |
+| `multiple` | bool | `true` | Whether the type can be placed more than once. |
+| `refresh` | number (seconds) | none | How often the content changes: a hint for MacHUD's gallery and the app's own timers. HUDKit does not redraw on it. |
+| `settingsSchema` | string | none | Per-instance [settings schema](#settings-schema), relative to `Contents/Resources` (`HUDSettingsSchema.load(widget:manifest:bundleURL:)`). Not the app's settings: a widget panel's own `settingsSchema` key still names the app's schema like any panel's. |
+
+The whole object is optional and read leniently (`HUDWidgetSpec`): a malformed value reads as
+its default and never invalidates the manifest. `hello` returns it on the panel, defaults
+filled in. `HUDManifest.dockPanels` and `dockSorted` leave widget panels out (no dock button;
+an app with only widgets has none); `HUDManifest.widgetPanels` lists them.
+
+**Sizes** are grid footprints (`HUDWidgetSize`). MacHUD chooses the cell size and gap and sends
+frames; the nominal cell (170 pt, 16 pt gap; `points(cell:gap:)`) is for snapshots and for
+instances created without a frame.
+
+| Size | Cells (columns × rows) | Nominal points |
+|---|---|---|
+| `small` | 1 × 1 | 170 × 170 |
+| `medium` | 2 × 1 | 356 × 170 |
+| `large` | 2 × 2 | 356 × 356 |
+| `extraLarge` | 4 × 2 | 728 × 356 |
+
+### Instances
+
+```json
+{"instance": "8F0C1E2A", "type": "clock", "size": "small", "frame": [24, 820, 170, 170],
+ "layer": "desktop", "settings": {"zone": "Europe/Oslo"}}
+```
+
+| Key | Type | Meaning |
+|---|---|---|
+| `instance` | string | MacHUD's id; opaque to the app. |
+| `type` | string | The widget panel id. |
+| `size` | size name | One of the type's `sizes`. |
+| `frame` | `[x, y, w, h]` | AppKit screen coordinates (origin bottom-left of the main display). Also accepted: `"x,y,w,h"` and `{"x","y","w","h"}`, as values or as their JSON text (an array arg reaches the app as `"[x,y,w,h]"`). Positive width and height. |
+| `layer` | `"desktop"` \| `"float"` | `desktop`: on the desktop, under every window. `float`: above windows (`.floating`). |
+| `settings` | object | The instance's settings. Values the type's schema lists are checked and typed by it (a `bool` field turns `"on"` into `true`); keys it does not list are kept unchecked. |
+
+### The widget verb
+
+Served by `HUDWidgetHost` once the app sets `router.widgetHost`; without one every call answers
+`{"ok": false, "error": "no widgets"}`. The sub-verb is `action=<sub>` (what MacHUD sends) or the
+CLI's bare word (`widget edit on`). A bare `widget` (no args at all) is `list`; args without a
+sub-verb are an error, so a `sync` that lost its `action` cannot pass for a list.
+
+| Sub-verb | Args | Reply |
+|---|---|---|
+| `create` | `instance= type=` plus optional `size=` (default the type's `defaultSize`), `frame=` (default the nominal size centred on the main screen), `layer=` (default `desktop`), `settings=<JSON object>` | `{ok, instance: <instance>}` |
+| `update` | `instance=` plus any of `size= frame= layer= settings=` (`settings` replaces the instance's settings; `size` without `frame` keeps the top-left corner at the nominal size) | `{ok, instance}` |
+| `remove` | `instance=` | `{ok, removed: <id>}` |
+| `list` | | `{ok, instances: [...], editing, revealed, types: [<registered type>, ...]}` |
+| `sync` | `instances=<JSON array of instances>` plus optional `editing=on\|off` and `revealed=on\|off` (both default `off`) | `{ok, instances: [<accepted>], rejected: [{instance?, error}], droppedSettings: [{instance, key, error}], editing, revealed}` |
+| `edit` | `state=on\|off` (also `true/false/1/0/yes/no`) or a bare `on`/`off` | `{ok, editing}` |
+| `reveal` | same | `{ok, revealed}` |
+| `schema` | `type=` | `{ok, type, schema}`: the type's per-instance settings schema |
+
+`sync` is the whole state: it replaces every instance with the list (an instance whose id and
+type survive keeps its window) and sets edit and reveal mode, off unless given, so a sync after
+MacHUD restarted mid-edit leaves no widget unlocked or raised. It restores what it can: an entry
+that fails validation (no `instance`/`type`, an unknown type, a bad size, frame or layer,
+`settings` that is not an object, a duplicate id, a second instance of a `multiple: false` type)
+is skipped and listed in `rejected`; a setting the schema rejects drops only that key, listed in
+`droppedSettings`, and the instance is kept. A bad `editing`/`revealed` or `instances` fails the
+whole call and changes nothing.
+
+`create` and `update` are strict and change nothing when they fail. `settings` and `instances` may be sent as
+JSON values or as their JSON text (see [Framing](#framing-and-connections)).
+
+```json
+{"command": "widget", "args": {"action": "create", "instance": "8F0C1E2A", "type": "clock", "size": "small",
+                               "frame": "24,820,170,170", "settings": {"zone": "Europe/Oslo"}}}
+{"ok": true, "instance": {"instance": "8F0C1E2A", "type": "clock", "size": "small", "frame": [24, 820, 170, 170],
+                          "layer": "desktop", "settings": {"zone": "Europe/Oslo"}}}
+
+{"command": "widget", "args": {"action": "edit", "state": "on"}}
+{"ok": true, "editing": true}
+```
+
+| Request | Error |
+|---|---|
+| `create` without `instance`/`type` | `widget create needs instance=` / `widget create needs type=` |
+| `update`/`remove` without `instance` | `widget update needs instance=` / `widget remove needs instance=` |
+| a type not registered | `no widget type radar (clock, weather)` (the registered types) |
+| an instance id in use (`create`) | `widget 8F0C1E2A exists` |
+| a second instance of a `multiple: false` type | `weather allows one instance` |
+| an unknown instance (`update`, `remove`) | `no such widget 8F0C1E2A` |
+| a size name that does not exist | `size must be small, medium, large or extraLarge` |
+| a size the type does not declare | `clock size must be one of small, medium` |
+| a bad frame | `frame must be x,y,w,h` / `frame must have a positive width and height` |
+| a bad layer | `layer must be desktop or float` |
+| `settings` not a JSON object | `settings must be a JSON object` |
+| a setting the schema rejects | `<key> <reason>` (`scale must be at most 2`) |
+| `sync` without a JSON array | `widget sync needs instances=<JSON array>` / `instances must be a JSON array` |
+| `edit`/`reveal` without a state | `widget edit needs on or off` |
+| `sync` with a bad `editing`/`revealed` | `editing must be on or off` |
+| `schema` of a type without one | `unsupported: no settings schema for clock` |
+| any other sub-verb | `widget action must be one of create, update, remove, list, sync, edit, reveal, schema` |
+
+### Events
+
+What the user does to a widget is reported, not acted on, as a `widget` event; MacHUD's own
+commands never echo one. MacHUD persists the change and, where it answers, answers with a
+command.
+
+```json
+{"event": "widget", "instance": "8F0C1E2A", "type": "clock", "change": "frame", "frame": [40, 800, 170, 170]}
+```
+
+| `change` | Extra keys | When | MacHUD answers |
+|---|---|---|---|
+| `frame` | `frame` | the user dragged the widget in edit mode (the app has moved it) | `update frame=` with the snapped frame |
+| `size` | `size` (the next declared size) | the edit-mode resize control | `update size= frame=` |
+| `remove` | | the edit-mode remove control | `remove` |
+| `configure` | | the edit-mode settings control (shown when the type has a per-instance schema) | shows the instance's settings, then `update settings=` |
+| `settings` | `settings` (all of the instance's settings) | the widget changed its own settings (`HUDWidgetContext.updateSettings`); already applied | persists them |
+| `open` | | the widget asked to open its app (`openApp()`) and the app set no `onOpen` | may summon the app's first dock panel |
+
+### Behaviour
+
+| | Widget window (`HUDPanelWindow.Behavior.widget`) |
+|---|---|
+| Look | `HUDGlassView(.panel)`: the family glass, corner radius 20 (`HUDWidgetStyle.cornerRadius`) |
+| Level | `desktop`: `HUDPanelWindow.widgetDesktopLevel`, one above the desktop icons (`CGWindowLevelForKey(.desktopIconWindow) + 1`), under every app window; `float`: `.floating`. While `reveal` or `edit` is on, desktop widgets are raised to `.floating` too |
+| Spaces | every Space, stationary (Mission Control leaves it in place), out of the ⌘` cycle, not on full-screen Spaces (`widgetCollectionBehavior`). The every-Space membership is re-asserted (`reassertAllSpaces`) on every `create`, `update` and `sync`, after the Mac wakes and on every Space change |
+| Focus | non-activating: a click never activates the app; never key or main, unless the type was registered `keyable` (text input) |
+| Locked | not movable, and never by its background, outside edit mode |
+| Edit mode | content dimmed and not clickable; a drag surface moves the window and reports `frame`; remove (top left), settings (top right, if the type has a per-instance schema) and next size (bottom right, if it has more than one size) controls report events |
+
+### The app side
+
+```swift
+let widgets = HUDWidgetHost()                       // types' specs and schemas from the bundle
+widgets.register("clock") { ClockWidget(context: $0) }
+control.router.widgetHost = widgets                 // serves `widget`, publishes `widget` events
+```
+
+`HUDWidgetHost(manifest:bundleURL:)` defaults to the bundle's manifest; under `swift run` pass
+the `builtinManifest` (and set `schemas[type]` for per-instance schemas, which are otherwise read
+from the bundle). `register(_:keyable:content:)` takes the type and a SwiftUI view builder given
+a `HUDWidgetContext`:
+
+| `HUDWidgetContext` | |
+|---|---|
+| `instance`, `type`, `spec`, `schema` | which instance, its type, the type's `HUDWidgetSpec` and per-instance schema |
+| `size`, `layer`, `settings`, `isEditing` | published; the view updates when MacHUD changes them |
+| `context["key"]` | a setting, else the schema's default |
+| `updateSettings([key: value])` | validates (all or nothing), applies, reports `change: settings` |
+| `openApp()` | calls `widgets.onOpen`, else reports `change: open` |
+
+`widgets.writeSnapshot(type:size:settings:editing:to:)` renders one type at one size to a PNG
+(nominal points at 2x, over a dark stand-in for the glass) for an app's `--snapshot` path. It
+uses SwiftUI's `ImageRenderer`, which draws AppKit-backed views (`NSViewRepresentable`) as a
+placeholder.
+
+### What MacHUD does (contract 0.3)
+
+- Reads widget types from the manifest without launching the app, and per-instance schemas from
+  the bundle (`HUDSettingsSchema.load(widget:manifest:bundleURL:)`) or `widget schema`.
+- Sends `widget sync` with every instance it holds for the app, and its current `editing` and
+  `revealed`, after each (re)connect, so an app
+  that relaunches gets its widgets back, then `create`/`update`/`remove` as the user places,
+  moves, resizes, configures and removes them.
+- Sends `widget edit on|off` and `widget reveal on|off` to every app serving widgets.
+- Never shows widget panels as dock buttons, and never sends `panel` commands for them.
 
 ## File drops
 
@@ -703,7 +898,7 @@ check() { # check <name> <regex the reply must match> <request json>
   if printf '%s' "$got" | grep -Eq -- "$2"; then echo "PASS $1"; else echo "FAIL $1: $got"; fi
 }
 [ "$(stat -f %Sp "$SOCK")" = "srw-------" ] && echo "PASS socket 0600" || echo "FAIL socket mode $(stat -f %Sp "$SOCK")"
-check "hello"               '"hudkit":"0\.4\.[0-9]+"'        '{"command":"hello"}'
+check "hello"               '"hudkit":"[0-9]+\.[0-9]+\.[0-9]+"' '{"command":"hello"}'
 check "hello lists panel"   "\"id\":\"$PANEL\""               '{"command":"hello"}'
 check "hello verbs"         '"verbs":\["hello","panel","state","subscribe","settings","action","quit"' '{"command":"hello"}'
 check "state"               "\"id\":\"$PANEL\""               '{"command":"state"}'
@@ -730,6 +925,21 @@ grep -q '"subscribed":true' /tmp/hud-sub.$$ && grep -q '"event":"state"' /tmp/hu
   && echo "PASS subscribe" || echo "FAIL subscribe: $(cat /tmp/hud-sub.$$)"; rm -f /tmp/hud-sub.$$
 ```
 
+If the app serves widgets, set `TYPE` to one of its widget types (this puts a widget on the
+desktop for a moment):
+
+```sh
+TYPE=clock
+check "widget list"         '"instances":\['                  '{"command":"widget","args":{"action":"list"}}'
+check "widget create"       '"instance":\{'                   "{\"command\":\"widget\",\"args\":{\"action\":\"create\",\"instance\":\"compliance\",\"type\":\"$TYPE\",\"frame\":\"40,40,170,170\"}}"
+check "widget duplicate"    '"error":"widget compliance exists"' "{\"command\":\"widget\",\"args\":{\"action\":\"create\",\"instance\":\"compliance\",\"type\":\"$TYPE\"}}"
+check "widget unknown type" '"error":"no widget type'         '{"command":"widget","args":{"action":"create","instance":"x","type":"no-such-type"}}'
+check "widget edit"         '"editing":true'                  '{"command":"widget","args":{"action":"edit","state":"on"}}'
+check "widget edit off"     '"editing":false'                 '{"command":"widget","args":{"action":"edit","state":"off"}}'
+check "widget remove"       '"removed":"compliance"'          '{"command":"widget","args":{"action":"remove","instance":"compliance"}}'
+check "widget sync"         '"rejected":\[\]'                 '{"command":"widget","args":{"action":"sync","instances":"[]"}}'
+```
+
 Then, if the app set `menuProvider`; for a panel with `acceptsFileDrop`; and last of all `quit`:
 
 ```sh
@@ -751,6 +961,7 @@ Beyond the socket, a compliant app also:
 - [ ] sets `router.menuProvider` and attaches `HUDStatusItemPolicy` (menu bar consolidation);
 - [ ] installs `HUDEditMenu` if it has text input;
 - [ ] handles `action drop` if any panel declares `acceptsFileDrop`;
+- [ ] registers a view for every `kind: widget` panel and sets `router.widgetHost`, if it has any;
 - [ ] answers every handler quickly (nothing slow on the main thread).
 
 Checked on 2026-09-26 against the template app, the TallyHUD worked example and the Scratch dev

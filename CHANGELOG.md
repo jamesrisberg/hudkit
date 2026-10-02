@@ -5,15 +5,38 @@ All notable changes to HUDKit are documented here. The format follows
 `hello` reports as `hudkit` (`HUDKit.version`, kept equal to [VERSION](VERSION)). While HUDKit
 is 0.x a contract addition bumps the minor version and additive API or fixes the patch.
 
-## [Unreleased]
+## [0.3.0] - Unreleased
 
 ### Added
+- Desktop widgets (contract 0.3): a third panel kind, `widget`, so any MacHUD app can serve
+  widget types next to its hover or windowed panels. A widget type is one manifest panel with a
+  `widget` object (`sizes`, `defaultSize`, `multiple`, `refresh`, a per-instance
+  `settingsSchema`; `HUDWidgetSpec`, `HUDWidgetSize`) and one SwiftUI view registered on a
+  `HUDWidgetHost`, which owns the glass windows: on the desktop under every window or floating
+  above them, on every Space, never focused, locked except in MacHUD's edit mode (drag, remove,
+  settings and next-size controls).
+- The `widget` verb (`router.widgetHost`): `create`, `update`, `remove`, `list`, `sync` (MacHUD
+  restores an app's widgets after it relaunches), `edit`, `reveal` and `schema`; the user's
+  changes come back as `widget` events. `HUDWidgetContext` gives a widget its instance, size,
+  settings and edit state, lets it change its own settings and open its app.
+- `HUDWidgetHost.writeSnapshot(type:size:settings:editing:to:)` renders a widget type to PNG.
+- `HUDPanelWindow.Behavior.widget`, `widgetDesktopLevel`, `widgetCollectionBehavior`.
+- `HUDManifest.dockPanels`, `widgetPanels`; `HUDSettingsSchema.load(widget:manifest:bundleURL:)`.
 - `onActiveSpace` in `panel` replies, `state` and `state` events: whether a visible panel's
   window is on the Space the user is looking at, so MacHUD can tell a show that never reached
   the screen. `HUDPanelHost.panelWindow(_:)` (default `HUDPanelHostDefaults.panelWindow(_:of:)`:
   the `HUDPanelWindow` whose new `panelID` matches, else a one-panel app's only visible one)
   finds the window. `HUDPanelWindow.activeSpaceDidSettleNotification` makes the router push
   `state` when the value settles after a show.
+
+### Changed
+- A panel `kind` HUDKit does not know is kept as `HUDManifest.Panel.Kind.unknown` and never
+  shown, instead of being read as `windowed`. `dockSorted` leaves out widget and unknown kinds.
+- `HUDManifest.Panel.Kind` is no longer a `String` raw-value enum: `init(rawValue:)` cannot
+  fail (an unknown string is `.unknown(_)`), and the new `.widget` and `.unknown` cases break
+  exhaustive `switch`es over it. `kind: .hover`, `== .hover` and `.rawValue` still compile.
+- `HUDPanelHostDefaults.panelWindow(_:of:)` never takes a widget window for a one-panel app's
+  panel.
 
 ### Fixed
 - Hover panels and dock labels appear on the Space the user is on, every time. The window
