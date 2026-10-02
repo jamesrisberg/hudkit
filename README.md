@@ -88,7 +88,9 @@ all-Spaces hover panel; `HUDPanelWindow(contentRect:behavior: .windowed)` is the
 normal window (normal level, activates its app, current Space, Dock tile while shown via
 `HUDDockPolicy`). `applyHUDRecipe(behavior:)` applies or switches either recipe, and
 `activateOnShow(_:)` brings the window forward for a `panel show` without stealing focus on
-`reason=hover`. `HUDAnimation.reveal/conceal` use the 0.22 s ease-out / 0.18 s ease-in timings;
+`reason=hover`. `HUDPanelWindow(contentRect:behavior: .widget)` is a desktop widget window
+(desktop layer or floating, every Space, never focused, locked); `HUDWidgetHost` makes them.
+`HUDAnimation.reveal/conceal` use the 0.22 s ease-out / 0.18 s ease-in timings;
 `HUDParking.offScreenFrame(for:edge:peek:)`, `restFrame(for:in:)`, `slideOut`/`slideIn` park a
 window against a screen edge with a visible sliver.
 
@@ -141,6 +143,28 @@ The router publishes a `state` event after every `panel` command; the app publis
 Optional verbs: `menu` (the app's status menu as `{items:[{id, title, kind, enabled, state,
 keyEquivalent?, modifiers?, items?}]}`) and `menu-invoke id= [title=]`, served once the app sets
 `router.menuProvider`; see "Menu bar consolidation" in [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+`widget create|update|remove|list|sync|edit|reveal|schema`, served once the app sets
+`router.widgetHost`; see below.
+
+### Widgets
+
+Any app may serve desktop widgets next to its panels: one `kind: widget` manifest panel per
+widget type (with a `widget` object: `sizes` small 1×1 / medium 2×1 / large 2×2 / extraLarge 4×2
+grid cells, `defaultSize`, `multiple`, `refresh`, a per-instance `settingsSchema`) and one view
+registered on a `HUDWidgetHost`:
+
+```swift
+let widgets = HUDWidgetHost()
+widgets.register("clock") { ClockWidget(context: $0) }   // context: instance, size, settings, isEditing
+control.router.widgetHost = widgets                      // before the socket starts
+```
+
+MacHUD owns the instances (id, type, size, frame, layer, settings) and drives them with the
+`widget` verb, including `sync` after every (re)connect; the user's edits come back as `widget`
+events (`frame`, `size`, `remove`, `configure`, `settings`, `open`). `writeSnapshot(type:size:to:)`
+renders a type to PNG. Widget panels never get a dock button (`HUDManifest.dockPanels`), and a kind
+HUDKit does not know is kept and ignored rather than read as windowed. Spec:
+[docs/CONTRACT.md § Widgets](docs/CONTRACT.md#widgets).
 
 ### The MacHUD dock
 

@@ -94,6 +94,12 @@ In `Sources/<Product>/Resources/Info.plist`: `CFBundleExecutable` = `<Product>`,
   screen (`HUDDockPolicy`, opt out with `showsInDock = false`). Hover panels, dock strips and
   drawers stay `.hover` (floating, every Space, non-activating). Show the window with
   `activateOnShow(transition)`: `reason=hover` never steals focus, click/summon activate.
+- **Widgets** (optional, any app): each widget type is a `kind: widget` manifest panel (also in
+  `builtinManifest`) with a view registered on a `HUDWidgetHost`, set as `router.widgetHost`
+  before the socket starts. HUDKit makes the windows (`.widget`: desktop layer or floating,
+  every Space, never focused, locked outside MacHUD's edit mode); the app keeps no widget state
+  of its own beyond what MacHUD sends. Per-instance settings schemas are named
+  `<type>.widget.json` in `Resources`. See [CONTRACT.md § Widgets](CONTRACT.md#widgets).
 - **Env isolation** (every app, read in one `AppEnvironment` enum):
   - `<REPO>_HOME`: base directory for everything the app writes (default
     `~/Library/Application Support/<Product>`); an isolated instance also keeps its panel frames

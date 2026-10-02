@@ -1,7 +1,7 @@
 # Building a MacHUD app: the agent playbook
 
 For an AI coding agent asked to "make me a MacHUD app that does X". Follow the steps in order;
-every command here was run as written (macOS 26.6, Swift 6.4, HUDKit 0.2.0). The
+every command here was run as written (macOS 26.6, Swift 6.4, HUDKit 0.3.0). The
 spec behind it is [CONTRACT.md](CONTRACT.md); the CLI grammar is [CLI.md](CLI.md); repo rules
 are [CONVENTIONS.md](CONVENTIONS.md).
 
@@ -25,7 +25,7 @@ Settle these before writing code; ask the user when the request does not say.
 |---|---|---|
 | Repo name | lowercase letters and digits, starts with a letter; it is also the socket name, CLI name and bundle id suffix | `tallyhud` |
 | Product | a Swift identifier; the displayed name and target prefix; lowercased it should equal the repo | `TallyHUD` |
-| Panel kind | `hover`: a glance-and-go panel that drops out of the MacHUD dock while the pointer rests on its button (clipboard, notes, a converter). `windowed`: a working window the user clicks to open and keeps (a file browser, a dashboard). See [section 5](#5-window-behaviour-hover-or-windowed) | `hover` |
+| Panel kind | `hover`: a glance-and-go panel that drops out of the MacHUD dock while the pointer rests on its button (clipboard, notes, a converter). `windowed`: a working window the user clicks to open and keeps (a file browser, a dashboard). See [section 5](#5-window-behaviour-hover-or-windowed). Desktop widgets are extra panels next to these ([Widgets](#widgets)) | `hover` |
 | Actions | the app's verbs, each `action <verb> k=v` over the socket and a CLI shorthand | `bump`, `reset` |
 | Settings | what the user can change in MacHUD's settings window | `defaultStep` |
 | File drops | does the dock button accept files? (`acceptsFileDrop`) | yes |
@@ -942,6 +942,66 @@ A hover panel with a text field: create the window with
 `HUDPanelWindow(contentRect: ..., keyable: true)` and call `window.makeKey()` only for
 `reason=click|summon` (`HUDPanelWindow.takesFocus(transition)`), never for `reason=hover`.
 
+### Widgets
+
+Any app may also serve desktop widgets: small glass tiles MacHUD places on the desktop
+(under windows, raised by MacHUD's reveal) or floating above windows. Each widget type is one
+more manifest panel and one `register` call; MacHUD creates, moves, resizes, configures and
+removes the instances and gives them back after a relaunch. HUDKit owns the windows. The spec
+is [CONTRACT.md § Widgets](CONTRACT.md#widgets). For TallyHUD, a widget showing the count:
+
+1. `machud.json`, a second panel (the type's name is its `id`):
+
+   ```json
+   {"id": "count", "title": "Tally", "symbol": "number.circle", "kind": "widget",
+    "widget": {"sizes": ["small", "medium"], "defaultSize": "small", "multiple": true}}
+   ```
+
+   Add `"settingsSchema": "count.widget.json"` inside `widget` for per-instance settings (a
+   [settings schema](CONTRACT.md#settings-schema) file in `Resources`, separate from the app's
+   `settings.json`).
+2. `ControlHost.builtinManifest`, the same panel:
+   `HUDManifest.Panel(id: "count", title: "Tally", symbol: "number.circle", kind: .widget, widget: HUDWidgetSpec(sizes: [.small, .medium]))`.
+3. The view, given a `HUDWidgetContext` (instance, `size`, `settings` with `context["key"]`
+   falling back to the schema's default, `isEditing`):
+
+   ```swift
+   struct CountWidget: View {
+       @ObservedObject var model: AppModel
+       @ObservedObject var context: HUDWidgetContext
+       var body: some View {
+           VStack(alignment: .leading) {
+               Text("Tally").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+               Text("\(model.tally.count)").font(.system(size: context.size == .small ? 44 : 56, weight: .light, design: .rounded))
+           }
+           .foregroundStyle(.white)
+           .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+           .padding(16)
+       }
+   }
+   ```
+
+4. `AppDelegate`, after `control` exists and **before** `control.start()` (MacHUD sends
+   `widget sync` as soon as it connects):
+
+   ```swift
+   let widgets = HUDWidgetHost(manifest: control.manifest)
+   widgets.register("count") { [model] in CountWidget(model: model!, context: $0) }
+   widgets.onOpen = { [weak self] _ in self?.panel.show() }   // a click on the widget opens the panel
+   control.router.widgetHost = widgets
+   ```
+
+   Keep `widgets` in a property. `register(_:keyable: true)` for a widget with a text field;
+   widgets otherwise never take focus or activate the app.
+5. A snapshot of the widget for the `--snapshot` path or a test:
+   `try widgets.writeSnapshot(type: "count", size: .medium, to: url)`.
+6. Check it over the isolated socket: `tallyhud widget create instance=a type=count frame=40,40,170,170`,
+   `tallyhud widget edit on`, `tallyhud widget list`, `tallyhud widget remove instance=a`, and
+   the widget block of the [compliance checklist](CONTRACT.md#compliance-checklist).
+
+The widget needs MacHUD built on HUDKit 0.3 or later; an older MacHUD would offer a widget panel
+as a windowed app.
+
 ## 6. Look at it with --snapshot
 
 An agent cannot see the screen, and capturing the glass needs Screen Recording permission.
@@ -1004,7 +1064,7 @@ build/TallyHUD.app/Contents/MacOS/TallyHUD --snapshot /tmp/tallyhud.png    # pri
 build/TallyHUD.app/Contents/MacOS/TallyHUD > /tmp/tallyhud-test.log 2>&1 &
 CLI=build/TallyHUD.app/Contents/Helpers/tallyhud
 for i in {1..50}; do $CLI hello > /dev/null 2>&1 && break; sleep 0.2; done
-$CLI hello                       # "ok": true, "hudkit": "0.2.0", "app": "xyz.machud.tallyhud", "version": "0.1.0"
+$CLI hello                       # "ok": true, "hudkit": "0.3.0", "app": "xyz.machud.tallyhud", "version": "0.1.0"
 $CLI panel show id=main          # "visible": true
 $CLI state                       # panels[0]: "id": "main", "visible": true, "badge": "0"
 $CLI bump 2                      # "count": 2
@@ -1118,6 +1178,8 @@ user's MacHUD again. Never set `MACHUD_SOCKET` to `/tmp/machud-$(id -u).sock` (t
       lists the actions and keeps `frame`; `acceptsFileDrop` only with a `drop` handler.
 - [ ] `settings.json` has every key in `AppSettings.keys`, with a `default` and a `help` line.
 - [ ] Hover panels never take focus on `reason=hover`; windowed ones use `activateOnShow`.
+- [ ] Every `kind: widget` panel has a registered view, `router.widgetHost` is set before the
+      socket starts, and a widget snapshot was inspected.
 - [ ] `HUDEditMenu.install` if there is any text input; hotkey unused by siblings.
 - [ ] `router.menuProvider` set and `HUDStatusItemPolicy` attached; `<repo> menu` lists the menu.
 - [ ] CLI `--help` lists every shorthand; `docs/CONTRACT.md`, README tables and `CHANGELOG.md`
