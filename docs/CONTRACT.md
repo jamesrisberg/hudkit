@@ -565,7 +565,7 @@ clock), and an app may serve only widgets. Contract 0.3; the app side is `HUDWid
 ```json
 {"id": "clock", "title": "Clock", "symbol": "clock", "kind": "widget",
  "widget": {"sizes": ["small", "medium"], "defaultSize": "small", "multiple": true,
-            "refresh": 1, "settingsSchema": "clock.settings.json"}}
+            "refresh": 1, "settingsSchema": "clock.widget.json"}}
 ```
 
 | `widget` key | Type | Default | Meaning |
@@ -604,7 +604,7 @@ instances created without a frame.
 | `instance` | string | MacHUD's id; opaque to the app. |
 | `type` | string | The widget panel id. |
 | `size` | size name | One of the type's `sizes`. |
-| `frame` | `[x, y, w, h]` | AppKit screen coordinates (origin bottom-left of the main display). In args also `"x,y,w,h"`; in `sync` also `{"x","y","w","h"}`. Positive width and height. |
+| `frame` | `[x, y, w, h]` | AppKit screen coordinates (origin bottom-left of the main display). Also accepted: `"x,y,w,h"` and `{"x","y","w","h"}`, as values or as their JSON text (an array arg reaches the app as `"[x,y,w,h]"`). Positive width and height. |
 | `layer` | `"desktop"` \| `"float"` | `desktop`: on the desktop, under every window. `float`: above windows (`.floating`). |
 | `settings` | object | The instance's settings. Values the type's schema lists are checked and typed by it (a `bool` field turns `"on"` into `true`); keys it does not list are kept unchecked. |
 
@@ -612,7 +612,8 @@ instances created without a frame.
 
 Served by `HUDWidgetHost` once the app sets `router.widgetHost`; without one every call answers
 `{"ok": false, "error": "no widgets"}`. The sub-verb is `action=<sub>` (what MacHUD sends) or the
-CLI's bare word (`widget edit on`); with none, `list`.
+CLI's bare word (`widget edit on`). A bare `widget` (no args at all) is `list`; args without a
+sub-verb are an error, so a `sync` that lost its `action` cannot pass for a list.
 
 | Sub-verb | Args | Reply |
 |---|---|---|
@@ -620,12 +621,21 @@ CLI's bare word (`widget edit on`); with none, `list`.
 | `update` | `instance=` plus any of `size= frame= layer= settings=` (`settings` replaces the instance's settings; `size` without `frame` keeps the top-left corner at the nominal size) | `{ok, instance}` |
 | `remove` | `instance=` | `{ok, removed: <id>}` |
 | `list` | | `{ok, instances: [...], editing, revealed, types: [<registered type>, ...]}` |
-| `sync` | `instances=<JSON array of instances>` | `{ok, instances: [<accepted>], rejected: [{instance?, error}]}`: replaces every instance with the list (an instance whose id and type survive keeps its window); entries that fail validation are skipped and reported, the rest applied |
+| `sync` | `instances=<JSON array of instances>` plus optional `editing=on\|off` and `revealed=on\|off` (both default `off`) | `{ok, instances: [<accepted>], rejected: [{instance?, error}], droppedSettings: [{instance, key, error}], editing, revealed}` |
 | `edit` | `state=on\|off` (also `true/false/1/0/yes/no`) or a bare `on`/`off` | `{ok, editing}` |
 | `reveal` | same | `{ok, revealed}` |
 | `schema` | `type=` | `{ok, type, schema}`: the type's per-instance settings schema |
 
-`create` and `update` change nothing when they fail. `settings` and `instances` may be sent as
+`sync` is the whole state: it replaces every instance with the list (an instance whose id and
+type survive keeps its window) and sets edit and reveal mode, off unless given, so a sync after
+MacHUD restarted mid-edit leaves no widget unlocked or raised. It restores what it can: an entry
+that fails validation (no `instance`/`type`, an unknown type, a bad size, frame or layer,
+`settings` that is not an object, a duplicate id, a second instance of a `multiple: false` type)
+is skipped and listed in `rejected`; a setting the schema rejects drops only that key, listed in
+`droppedSettings`, and the instance is kept. A bad `editing`/`revealed` or `instances` fails the
+whole call and changes nothing.
+
+`create` and `update` are strict and change nothing when they fail. `settings` and `instances` may be sent as
 JSON values or as their JSON text (see [Framing](#framing-and-connections)).
 
 ```json
@@ -654,6 +664,7 @@ JSON values or as their JSON text (see [Framing](#framing-and-connections)).
 | a setting the schema rejects | `<key> <reason>` (`scale must be at most 2`) |
 | `sync` without a JSON array | `widget sync needs instances=<JSON array>` / `instances must be a JSON array` |
 | `edit`/`reveal` without a state | `widget edit needs on or off` |
+| `sync` with a bad `editing`/`revealed` | `editing must be on or off` |
 | `schema` of a type without one | `unsupported: no settings schema for clock` |
 | any other sub-verb | `widget action must be one of create, update, remove, list, sync, edit, reveal, schema` |
 
@@ -682,7 +693,7 @@ command.
 |---|---|
 | Look | `HUDGlassView(.panel)`: the family glass, corner radius 20 (`HUDWidgetStyle.cornerRadius`) |
 | Level | `desktop`: `HUDPanelWindow.widgetDesktopLevel`, one above the desktop icons (`CGWindowLevelForKey(.desktopIconWindow) + 1`), under every app window; `float`: `.floating`. While `reveal` or `edit` is on, desktop widgets are raised to `.floating` too |
-| Spaces | every Space, stationary (Mission Control leaves it in place), out of the ⌘` cycle, not on full-screen Spaces (`widgetCollectionBehavior`) |
+| Spaces | every Space, stationary (Mission Control leaves it in place), out of the ⌘` cycle, not on full-screen Spaces (`widgetCollectionBehavior`). The every-Space membership is re-asserted (`reassertAllSpaces`) on every `create`, `update` and `sync`, after the Mac wakes and on every Space change |
 | Focus | non-activating: a click never activates the app; never key or main, unless the type was registered `keyable` (text input) |
 | Locked | not movable, and never by its background, outside edit mode |
 | Edit mode | content dimmed and not clickable; a drag surface moves the window and reports `frame`; remove (top left), settings (top right, if the type has a per-instance schema) and next size (bottom right, if it has more than one size) controls report events |
@@ -717,7 +728,8 @@ placeholder.
 
 - Reads widget types from the manifest without launching the app, and per-instance schemas from
   the bundle (`HUDSettingsSchema.load(widget:manifest:bundleURL:)`) or `widget schema`.
-- Sends `widget sync` with every instance it holds for the app after each (re)connect, so an app
+- Sends `widget sync` with every instance it holds for the app, and its current `editing` and
+  `revealed`, after each (re)connect, so an app
   that relaunches gets its widgets back, then `create`/`update`/`remove` as the user places,
   moves, resizes, configures and removes them.
 - Sends `widget edit on|off` and `widget reveal on|off` to every app serving widgets.
