@@ -206,6 +206,7 @@ A panel state (`HUDPanelState.json`):
 | `mode` | `"full"` \| `"compact"` \| `"parked"` | current representation |
 | `badge` | string, optional | short count or marker MacHUD may show (e.g. a number) |
 | `status` | string, optional | one line describing what the panel shows |
+| `onActiveSpace` | bool, optional | whether the panel's window is on the Space (desktop) the user is looking at. Present only while `visible` is true, the window is ordered in and the router can find it (`HUDPanelHost.panelWindow(_:)`: by default the `HUDPanelWindow` whose `panelID` is the panel id, else a one-panel app's only visible `HUDPanelWindow`). AppKit's view (`isOnActiveSpace`), which can lag the window server for a moment after a show that had to repair the window; a `state` event follows once it settles (see [Behaviour](#behaviour-hover-and-windowed)). Older apps never send it: treat absence as unknown. Not produced by `HUDPanelState`. |
 | `frame` | optional | Not produced by `HUDPanelState`. MacHUD accepts `[x,y,w,h]`, `{"x","y","w","h"}` or `"x,y,w,h"` (AppKit screen coordinates) and uses it as the panel's frame for hover hit-testing and HUD capture; a state without it makes MacHUD forget the last one. |
 
 ### panel
@@ -213,8 +214,8 @@ A panel state (`HUDPanelState.json`):
 Args: `id=<panel>` plus a sub-verb given either as `action=<sub>` (what MacHUD sends) or as a bare
 key (what the CLI sends: `panel show id=main` → `{"show": "1", "_": "show", "id": "main"}`). With
 no sub-verb, `toggle`. Every successful `panel` reply is
-`{"ok": true, "visible": <bool>, "mode": "<mode>"}` (the state right after the call) and the
-router then pushes a `state` event.
+`{"ok": true, "visible": <bool>, "mode": "<mode>"}` (the state right after the call), plus
+`onActiveSpace` when known (see [state](#state)), and the router then pushes a `state` event.
 
 | Sub-verb | Extra args | Host method called |
 |---|---|---|
@@ -516,7 +517,20 @@ The manifest's `kind` tells MacHUD how to present a panel; the app's window beha
 
 `HUDPanelWindow.activateOnShow(_:)` implements the focus rules for both behaviours: with
 `reason=hover` it only orders the window in; otherwise it makes it key, and a windowed window
-also activates the app (moving it to the current Space first if needed). Apps may shorten the
+also activates the app (moving it to the current Space first if needed).
+
+A hover window appears on the Space the user is on, every time, whichever call orders it in
+(`orderFrontRegardless`, `orderFront`, `makeKeyAndOrderFront`, `HUDAnimation`,
+`activateOnShow`): HUDPanelWindow re-asserts the hover Spaces behaviour on every order-in (the
+window server can drop a window's all-Spaces membership while AppKit still reports
+`.canJoinAllSpaces`, and AppKit does not resend an unchanged value), and 0.15 s later, if the
+window is still visible on another Space, brings it over with `.moveToActiveSpace` and restores
+the behaviour, without switching Spaces, making it key or activating the app. A change found
+then posts `HUDPanelWindow.activeSpaceDidSettleNotification` and the router pushes `state` with
+the settled `onActiveSpace`. Apps get this by showing a `HUDPanelWindow` built against this
+HUDKit; nothing to call. Setting `panelID` on the window (or overriding
+`HUDPanelHost.panelWindow(_:)`) lets an app with several panels or windows report
+`onActiveSpace`. Apps may shorten the
 hover fades (Scratch and Sift fade a hover show in within 0.08 s and a hover hide out in 0.1 s).
 
 A menu bar app has no main menu, so ⌘C/⌘V/⌘X/⌘A/⌘Z do nothing in its text fields. An app with

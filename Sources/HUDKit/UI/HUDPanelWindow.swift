@@ -54,6 +54,21 @@ open class HUDPanelWindow: NSPanel {
     /// The windowed recipe's: the current Space only, shown in Mission Control, in the ⌘` cycle.
     public static let windowedCollectionBehavior: NSWindow.CollectionBehavior = [.managed, .participatesInCycle]
 
+    /// The hover recipe's Spaces behaviour plus whatever else `current` asks for that does not
+    /// conflict with it (`.ignoresCycle`, say): the Spaces, Exposé and full-screen bits the
+    /// recipe sets replace their alternatives (`.managed`, `.transient`, `.moveToActiveSpace`,
+    /// `.participatesInCycle`, `.fullScreenPrimary`, `.fullScreenNone`).
+    public static func hoverCollectionBehavior(keeping current: NSWindow.CollectionBehavior) -> NSWindow.CollectionBehavior {
+        let conflicting: NSWindow.CollectionBehavior = [.moveToActiveSpace, .managed, .transient, .participatesInCycle,
+                                                        .fullScreenPrimary, .fullScreenNone]
+        return current.subtracting(conflicting).union(hoverCollectionBehavior)
+    }
+
+    /// The manifest panel id this window shows, so `HUDPanelHost.panelWindow(_:)`'s default can
+    /// find it and report `onActiveSpace`. Optional for an app with one panel and one
+    /// `HUDPanelWindow`.
+    public var panelID: String?
+
     /// Creates a hover panel with the recipe applied.
     public convenience init(contentRect: CGRect, keyable: Bool = false, level: NSWindow.Level = .floating) {
         self.init(contentRect: contentRect, styleMask: Self.recipeStyleMask, backing: .buffered, defer: false)
@@ -124,13 +139,14 @@ open class HUDPanelWindow: NSPanel {
 
     /// Brings the window forward for a `panel show` (or the app's own summon). A hover
     /// show (`reason=hover`: the pointer is only passing over MacHUD's dock) orders it in
-    /// without taking focus. Anything else (click, summon, no reason) makes it key; a
+    /// without taking focus (and, like every order-in of a hover window, onto the Space the
+    /// user is on). Anything else (click, summon, no reason) makes it key; a
     /// windowed window also activates the app, and first moves to the current Space if it
     /// is on another one. Returns whether it took focus.
     @discardableResult
     public func activateOnShow(_ transition: HUDPanelTransition = HUDPanelTransition()) -> Bool {
         guard Self.takesFocus(transition) else {
-            if !isVisible { orderFrontRegardless() }
+            if !isVisible || behavior == .hover { orderFrontRegardless() }
             return false
         }
         if behavior == .windowed {
@@ -164,20 +180,97 @@ open class HUDPanelWindow: NSPanel {
         transition.reason != .hover
     }
 
-    // Keep the activation policy in step with visibility.
+    // Keep the activation policy in step with visibility, and hover windows on the user's Space.
     open override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        let hoverShow = place != .out && prepareHoverShow()
         super.order(place, relativeTo: otherWin)
+        if hoverShow { finishHoverShow() }
         HUDDockPolicy.shared.update(self)
     }
 
     open override func orderFrontRegardless() {
+        let hoverShow = prepareHoverShow()
         super.orderFrontRegardless()
+        if hoverShow { finishHoverShow() }
         HUDDockPolicy.shared.update(self)
     }
 
     open override func close() {
         super.close()
         HUDDockPolicy.shared.update(self)
+    }
+
+    // MARK: Hover windows on every Space
+
+    /// Set while `ensureOnActiveSpace` re-orders the window, so the overrides do not recurse.
+    private var movingToActiveSpace = false
+    /// A Space check is scheduled (one at a time).
+    private var spaceCheckPending = false
+    /// `isOnActiveSpace` right after the order-in the pending check follows.
+    private var onActiveSpaceAtShow = true
+    /// Test seam: false skips the show's re-assertion so the fallback can be tested alone.
+    var reassertsSpacesOnShow = true
+
+    /// Posted (object: the window) when the Space check after a hover show finds the window
+    /// somewhere other than `isOnActiveSpace` said at the show, or had to bring it over.
+    /// `HUDControlRouter` publishes `state` on it, so `onActiveSpace` settles for subscribers.
+    public static let activeSpaceDidSettleNotification = Notification.Name("HUDPanelWindowActiveSpaceDidSettle")
+    /// How long after an order-in the Space check runs. AppKit learns where the window
+    /// server put a window asynchronously, so `isOnActiveSpace` read in the same turn can
+    /// still describe the Space the window was on before.
+    static let spaceCheckDelay: TimeInterval = 0.15
+
+    /// Every order-in of a hover window (`orderFrontRegardless`, `orderFront`,
+    /// `makeKeyAndOrderFront`, HUDAnimation, `activateOnShow`) first re-asserts the hover
+    /// Spaces behaviour. On 2026-10-01 four apps' hover panels were found on one desktop only:
+    /// the window server had dropped their all-Spaces (sticky) membership while AppKit still
+    /// held `.canJoinAllSpaces`, and AppKit's setter skips an unchanged value, so no show ever
+    /// repaired it. Taking `.canJoinAllSpaces` out and putting it back makes AppKit send it
+    /// again. Returns whether this is a hover show to finish after ordering in.
+    private func prepareHoverShow() -> Bool {
+        guard behavior == .hover, !movingToActiveSpace else { return false }
+        guard reassertsSpacesOnShow else { return true }
+        let target = Self.hoverCollectionBehavior(keeping: collectionBehavior)
+        collectionBehavior = target.subtracting(.canJoinAllSpaces)
+        collectionBehavior = target
+        return true
+    }
+
+    /// Schedules `ensureOnActiveSpace` for once the window server has settled.
+    private func finishHoverShow() {
+        onActiveSpaceAtShow = isOnActiveSpace
+        guard !spaceCheckPending else { return }
+        spaceCheckPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.spaceCheckDelay) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.spaceCheckPending = false
+                guard self.isVisible else { return }
+                let moved = self.ensureOnActiveSpace()
+                if moved || self.isOnActiveSpace != self.onActiveSpaceAtShow {
+                    NotificationCenter.default.post(name: Self.activeSpaceDidSettleNotification, object: self)
+                }
+            }
+        }
+    }
+
+    /// If a visible hover window is still not on the active Space, brings it over the way a
+    /// windowed show does (`.moveToActiveSpace`, without switching Spaces or taking focus),
+    /// then restores the hover behaviour. Returns whether it had to.
+    @discardableResult
+    func ensureOnActiveSpace() -> Bool {
+        guard behavior == .hover, isVisible, !isOnActiveSpace, !movingToActiveSpace else { return false }
+        let hover = Self.hoverCollectionBehavior(keeping: collectionBehavior)
+        movingToActiveSpace = true
+        defer { movingToActiveSpace = false }
+        // Not on screen here (it is on another Space), so ordering out and back in is unseen;
+        // `orderFrontRegardless` neither makes it key nor activates the app.
+        super.order(.out, relativeTo: 0)
+        collectionBehavior = hover.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
+        super.orderFrontRegardless()
+        collectionBehavior = hover.subtracting(.canJoinAllSpaces)
+        collectionBehavior = hover
+        return true
     }
 
     /// Level for a panel anchored under the notch or hanging from the menu bar: `.statusBar`
