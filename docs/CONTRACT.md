@@ -683,7 +683,7 @@ command.
 | `frame` | `frame` | the user dragged the widget in edit mode (the app has moved it) | `update frame=` with the snapped frame |
 | `size` | `size` (the next declared size) | the edit-mode resize control | `update size= frame=` |
 | `remove` | | the edit-mode remove control | `remove` |
-| `configure` | | the edit-mode settings control (shown when the type has a per-instance schema) | shows the instance's settings, then `update settings=` |
+| `configure` | | the edit-mode settings control (shown when the type has a per-instance schema), or the widget's own button through `HUDWidgetContext.configure()` | shows the instance's settings, then `update settings=` |
 | `settings` | `settings` (all of the instance's settings) | the widget changed its own settings (`HUDWidgetContext.updateSettings`); already applied | persists them |
 | `open` | | the widget asked to open its app (`openApp()`) and the app set no `onOpen` | may summon the app's first dock panel |
 
@@ -890,6 +890,12 @@ Run against a running instance (preferably an isolated one: see
 id, then paste the block into zsh or bash. Every line must print `PASS`. It shows and hides the
 panel.
 
+An app that serves only widgets has no dock panel to show: set `PANEL=` (empty) and the block
+skips the panel checks (`hello lists panel`, `panel show` and `hide`, the hover, anchor and
+frame checks, the panel id in `state`, the `state` event) and expects `"panels":[]` from
+`state`. Those checks are skipped by design, not failed; the widget block below is the app's
+panel check.
+
 ```sh
 SOCK="$HOME/Library/Application Support/MacHUD/sockets/tallyhud-test.sock"; PANEL=main
 q() { printf '%s\n' "$1" | nc -U "$SOCK"; }
@@ -899,18 +905,24 @@ check() { # check <name> <regex the reply must match> <request json>
 }
 [ "$(stat -f %Sp "$SOCK")" = "srw-------" ] && echo "PASS socket 0600" || echo "FAIL socket mode $(stat -f %Sp "$SOCK")"
 check "hello"               '"hudkit":"[0-9]+\.[0-9]+\.[0-9]+"' '{"command":"hello"}'
-check "hello lists panel"   "\"id\":\"$PANEL\""               '{"command":"hello"}'
 check "hello verbs"         '"verbs":\["hello","panel","state","subscribe","settings","action","quit"' '{"command":"hello"}'
-check "state"               "\"id\":\"$PANEL\""               '{"command":"state"}'
+if [ -n "$PANEL" ]; then
+  check "hello lists panel"   "\"id\":\"$PANEL\""               '{"command":"hello"}'
+  check "state"               "\"id\":\"$PANEL\""               '{"command":"state"}'
+else
+  check "state has no panels" '"panels":\[\]' '{"command":"state"}'
+fi
 check "help"                '"commands":\['                   '{"command":"help"}'
-check "panel show"          '"visible":true'                  "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\"}}"
-check "panel hide"          '"visible":false'                 "{\"command\":\"panel\",\"args\":{\"action\":\"hide\",\"id\":\"$PANEL\"}}"
-check "hover show"          '"ok":true'                       "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\",\"from\":\"bottom\",\"anchor\":\"600,6,44,44\",\"reason\":\"hover\"}}"
-check "hover hide"          '"ok":true'                       "{\"command\":\"panel\",\"args\":{\"action\":\"hide\",\"id\":\"$PANEL\",\"to\":\"bottom\",\"reason\":\"hover\"}}"
+if [ -n "$PANEL" ]; then
+  check "panel show"          '"visible":true'                  "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\"}}"
+  check "panel hide"          '"visible":false'                 "{\"command\":\"panel\",\"args\":{\"action\":\"hide\",\"id\":\"$PANEL\"}}"
+  check "hover show"          '"ok":true'                       "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\",\"from\":\"bottom\",\"anchor\":\"600,6,44,44\",\"reason\":\"hover\"}}"
+  check "hover hide"          '"ok":true'                       "{\"command\":\"panel\",\"args\":{\"action\":\"hide\",\"id\":\"$PANEL\",\"to\":\"bottom\",\"reason\":\"hover\"}}"
+  check "bad from"            '"ok":false'                      "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\",\"from\":\"diagonal\"}}"
+  check "bad anchor"          '"ok":false'                      "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\",\"anchor\":\"1,2,3\"}}"
+  check "frame needs x y w h" '"error":"panel frame needs'      "{\"command\":\"panel\",\"args\":{\"action\":\"frame\",\"id\":\"$PANEL\",\"x\":\"1\"}}"
+fi
 check "unknown panel"       '"error":"no such panel"'         '{"command":"panel","args":{"action":"show","id":"no-such-panel"}}'
-check "bad from"            '"ok":false'                      "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\",\"from\":\"diagonal\"}}"
-check "bad anchor"          '"ok":false'                      "{\"command\":\"panel\",\"args\":{\"action\":\"show\",\"id\":\"$PANEL\",\"anchor\":\"1,2,3\"}}"
-check "frame needs x y w h" '"error":"panel frame needs'      "{\"command\":\"panel\",\"args\":{\"action\":\"frame\",\"id\":\"$PANEL\",\"x\":\"1\"}}"
 check "settings get"        '"settings":\{'                   '{"command":"settings","args":{"action":"get"}}'
 check "settings schema"     '"schema":\{|"error":"unsupported: no settings schema"' '{"command":"settings","args":{"action":"schema"}}'
 check "settings set bad"    '"ok":false'                      '{"command":"settings","args":{"action":"set","no.such.setting":"1"}}'
@@ -919,10 +931,14 @@ check "unknown action"      '"ok":false'                      '{"command":"actio
 check "unknown command"     '"error":"unknown command'        '{"command":"no-such-command"}'
 check "malformed request"   '"error":"malformed request"'     'this is not json'
 { printf '%s\n' '{"command":"subscribe","args":{"events":"state"}}'; sleep 1; } | nc -U "$SOCK" > /tmp/hud-sub.$$ & SUB=$!
-sleep 0.3; q "{\"command\":\"panel\",\"args\":{\"action\":\"toggle\",\"id\":\"$PANEL\"}}" >/dev/null
-q "{\"command\":\"panel\",\"args\":{\"action\":\"toggle\",\"id\":\"$PANEL\"}}" >/dev/null; wait $SUB
-grep -q '"subscribed":true' /tmp/hud-sub.$$ && grep -q '"event":"state"' /tmp/hud-sub.$$ \
-  && echo "PASS subscribe" || echo "FAIL subscribe: $(cat /tmp/hud-sub.$$)"; rm -f /tmp/hud-sub.$$
+sleep 0.3
+if [ -n "$PANEL" ]; then
+  q "{\"command\":\"panel\",\"args\":{\"action\":\"toggle\",\"id\":\"$PANEL\"}}" >/dev/null
+  q "{\"command\":\"panel\",\"args\":{\"action\":\"toggle\",\"id\":\"$PANEL\"}}" >/dev/null
+fi
+wait $SUB
+if grep -q '"subscribed":true' /tmp/hud-sub.$$ && { [ -z "$PANEL" ] || grep -q '"event":"state"' /tmp/hud-sub.$$; }; then
+  echo "PASS subscribe"; else echo "FAIL subscribe: $(cat /tmp/hud-sub.$$)"; fi; rm -f /tmp/hud-sub.$$
 ```
 
 If the app serves widgets, set `TYPE` to one of its widget types (this puts a widget on the
@@ -954,7 +970,7 @@ Beyond the socket, a compliant app also:
 - [ ] ships `machud.json` that decodes (`HUDManifest.decode`), with `socket` = CLI name = repo name,
       and a `builtinManifest` equal to it (a test asserts both);
 - [ ] uses the window behaviour matching each panel's `kind`, and never takes focus on
-      `reason=hover`;
+      `reason=hover` (a widget-only app has no hover or windowed panel: nothing to check);
 - [ ] calls `router.publishState()` on every state change that does not come through `panel`;
 - [ ] reads `<REPO>_HOME`, `<REPO>_SOCKET`, `<REPO>_NO_HOTKEYS` (and is tested with
       `HUD_NO_ANNOUNCE=1`);
