@@ -157,13 +157,15 @@ final class ManifestOrderIconTests: XCTestCase {
         let m = try HUDManifest.decode(Data(json.utf8))
         XCTAssertEqual(m.iconName, "tray.full")
         XCTAssertEqual(m.panels.map(\.order), [2, 1, nil, nil, nil], "malformed order reads as nil")
-        XCTAssertEqual(m.panels[4].kind, .windowed, "unknown kind reads as windowed")
+        XCTAssertEqual(m.panels[4].kind, .unknown("floaty"), "an unknown kind is kept, never read as windowed")
+        XCTAssertFalse(m.panels[4].kind.isKnown)
         let again = try HUDManifest.decode(m.encoded())
         XCTAssertEqual(again, m)
+        XCTAssertEqual(again.panels[4].json["kind"] as? String, "floaty", "an unknown kind round-trips verbatim")
         XCTAssertEqual(m.panel(id: "w1")?.json["order"] as? Int, 1)
         XCTAssertNil(m.panel(id: "w0")?.json["order"], "nil order is omitted")
 
-        XCTAssertEqual(HUDManifest.dockSorted(m.panels).map(\.id), ["h", "w1", "w2", "w0", "x"])
+        XCTAssertEqual(HUDManifest.dockSorted(m.panels).map(\.id), ["h", "w1", "w2", "w0"], "unknown kinds are not dock panels")
 
         let bare = try HUDManifest.decode(Data(#"{"id":"b","name":"B","socket":"b"}"#.utf8))
         XCTAssertNil(bare.iconName)
