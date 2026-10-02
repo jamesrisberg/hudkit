@@ -11,8 +11,17 @@ public actor KokoroEngine {
     private var pipelines: [String: KPipeline] = [:]
     private var model: KModel?
     private var voices: VoiceLoader?
+    private var warmVoices: Set<String> = []
 
     public init(modelDirectory: URL) { self.modelDirectory = modelDirectory }
+
+    /// Loads the model and synthesizes one word with `voice`, discarding it, so the next real
+    /// synthesis skips loading and first-run setup. Returns at once for a voice already warm.
+    public func warmUp(voice: String) async throws {
+        guard !warmVoices.contains(voice) else { return }
+        _ = try await synthesize(text: KokoroVoice.warmUpText, voice: voice, speed: 1)
+        warmVoices.insert(voice)
+    }
 
     public func synthesize(text: String, voice: String, speed: Float) async throws -> [Float] {
         try Task.checkCancellation()

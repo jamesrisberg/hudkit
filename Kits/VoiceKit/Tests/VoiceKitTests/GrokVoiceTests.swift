@@ -183,7 +183,7 @@ struct GrokVoiceTests {
         #expect(secondCompletions == 0)  // stopped, not finished
     }
 
-    @Test func prepareFetchesWithoutPlayingAndAReplacementCancelsTheEarlierOne() async throws {
+    @Test func prepareFetchesWithoutPlayingAndSeveralRunAtOnce() async throws {
         var requests: [String] = []
         var continuations: [CheckedContinuation<Data, Error>] = []
         let voice = grok(requester: { request in
@@ -191,19 +191,19 @@ struct GrokVoiceTests {
             requests.append(body["text"] as! String)
             return try await withCheckedThrowingContinuation { continuations.append($0) }
         })
-        var oldResults = 0
-        var newClip: SpeechClip?
-        voice.prepare("Old") { _ in oldResults += 1 }
-        while continuations.count < 1 { await Task.yield() }
-        voice.prepare("New") { result in newClip = try? result.get() }
+        var firstClip: SpeechClip?
+        var secondClip: SpeechClip?
+        voice.prepare("First") { result in firstClip = try? result.get() }
+        voice.prepare("Second") { result in secondClip = try? result.get() }
         while continuations.count < 2 { await Task.yield() }
-        continuations[0].resume(returning: Data([9]))
-        for _ in 0..<10 { await Task.yield() }
-        #expect(oldResults == 0, "a replaced prepare never completes")
         continuations[1].resume(returning: Data([1, 2, 3]))
-        try await eventually { newClip != nil }
-        #expect(requests == ["Old", "New"])
-        #expect(newClip == SpeechClip(audio: Data([1, 2, 3])))
+        try await eventually { secondClip != nil }
+        #expect(firstClip == nil)
+        continuations[0].resume(returning: Data([9]))
+        try await eventually { firstClip != nil }
+        #expect(requests == ["First", "Second"])
+        #expect(firstClip == SpeechClip(audio: Data([9])))
+        #expect(secondClip == SpeechClip(audio: Data([1, 2, 3])))
     }
 
     @Test func stopCancelsAPendingPrepare() async throws {
