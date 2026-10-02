@@ -5,7 +5,9 @@ All notable changes to HUDKit are documented here. The format follows
 `hello` reports as `hudkit` (`HUDKit.version`, kept equal to [VERSION](VERSION)). While HUDKit
 is 0.x a contract addition bumps the minor version and additive API or fixes the patch.
 
-## [0.3.0] - Unreleased
+## [Unreleased]
+
+## [0.3.0] - 2026-10-02
 
 ### Added
 - Desktop widgets (contract 0.3): a third panel kind, `widget`, so any MacHUD app can serve
