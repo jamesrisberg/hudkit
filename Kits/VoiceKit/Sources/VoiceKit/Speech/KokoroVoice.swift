@@ -22,6 +22,11 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
 
     /// (text, voice, speed) → samples at `sampleRate`.
     public typealias Synthesizer = @Sendable (String, String, Double) async throws -> [Float]
+    /// Readies synthesis with a voice id (`warmUp()`).
+    public typealias Warmer = @Sendable (String) async throws -> Void
+
+    /// What a warm-up synthesizes when no `Warmer` is given; the audio is discarded.
+    public nonisolated static let warmUpText = "Hi."
 
     public nonisolated static let sampleRate = 24_000
     public nonisolated static let maximumSamples = sampleRate * 60 * 5
@@ -39,30 +44,70 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
 
     let playback: ClipPlayback
     private let synthesize: Synthesizer
+    private let warm: Warmer
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var completion: ((Result<Void, Error>) -> Void)?
-    /// A `prepare(_:completion:)` synthesis in flight, tracked apart from `generation`/`task`
-    /// so it can run while a different clip plays.
-    private var prepareGeneration = UUID()
-    private var prepareTask: Task<Void, Never>?
+    /// `prepare(_:completion:)` syntheses in flight, tracked apart from `generation`/`task` so
+    /// they can run while a different clip plays. `stop()` replaces `prepareEpoch`, so a
+    /// preparation that outlives its cancellation never completes.
+    private var prepareEpoch = UUID()
+    private var prepareTasks: [UUID: Task<Void, Never>] = [:]
+    /// The voice id warmed, or being warmed.
+    private var warmVoice: String?
 
-    /// Kokoro loaded from an installed model folder (`KokoroModels.directory(in:)`).
-    public convenience init(modelDirectory: URL, options: VoiceSettings.Kokoro = .init()) {
+    /// Engines by model folder: every `KokoroVoice` for one folder shares its loaded model, so
+    /// a voice made for each reply starts warm once any of them has warmed up or spoken.
+    private static var engines: [String: KokoroEngine] = [:]
+
+    static func engine(for modelDirectory: URL) -> KokoroEngine {
+        let key = modelDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+        if let engine = engines[key] { return engine }
         let engine = KokoroEngine(modelDirectory: modelDirectory)
-        self.init(options: options) { text, voice, speed in
+        engines[key] = engine
+        return engine
+    }
+
+    /// Kokoro loaded from an installed model folder (`KokoroModels.directory(in:)`). The loaded
+    /// model is kept for the life of the process and shared with every other `KokoroVoice` for
+    /// the same folder.
+    public convenience init(modelDirectory: URL, options: VoiceSettings.Kokoro = .init()) {
+        let engine = Self.engine(for: modelDirectory)
+        self.init(options: options, warm: { voice in try await engine.warmUp(voice: voice) }) { text, voice, speed in
             try await engine.synthesize(text: text, voice: voice, speed: Float(speed))
         }
     }
 
+    /// - Parameter warm: readies `synthesize` for a voice id; without it a warm-up synthesizes
+    ///   `warmUpText` and discards it.
     public init(
         options: VoiceSettings.Kokoro = .init(),
         makePlayer: @escaping (Data) throws -> AVAudioPlayer = { try AVAudioPlayer(data: $0) },
+        warm: Warmer? = nil,
         synthesize: @escaping Synthesizer
     ) {
         self.options = options
         self.synthesize = synthesize
+        self.warm = warm ?? { voice in _ = try await synthesize(KokoroVoice.warmUpText, voice, 1) }
         playback = ClipPlayback(makePlayer: makePlayer)
+    }
+
+    /// Readies the model for `options.voice` in the background; nothing plays. Repeated calls
+    /// for a voice already warm or warming do nothing; after a failure the next call tries
+    /// again.
+    public func warmUp() {
+        let voice = options.voice
+        guard warmVoice != voice else { return }
+        warmVoice = voice
+        let warm = warm
+        Task { [weak self] in
+            do {
+                try await warm(voice)
+            } catch {
+                guard let self, self.warmVoice == voice else { return }
+                self.warmVoice = nil
+            }
+        }
     }
 
     public nonisolated static func validate(text: String, voice: String, speed: Double) throws {
@@ -136,31 +181,30 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
         }
     }
 
-    /// Synthesizes `text` without playing it, so it can be handed to `play(_:completion:)`
-    /// once the clip currently playing finishes. Runs independently of `speak`/`play`'s own
-    /// generation, so it can proceed while another clip plays; a newer `prepare` call, or
-    /// `stop()`, cancels an earlier one.
+    /// Synthesizes `text` without playing it, so it can be handed to `play(_:completion:)` once
+    /// its turn comes. Runs independently of `speak`/`play`'s own generation, so it can proceed
+    /// while another clip plays; several can be in flight (the engine runs them one at a time,
+    /// in the order asked), and `stop()` cancels them all.
     public func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
-        prepareTask?.cancel()
-        let identity = UUID()
-        prepareGeneration = identity
+        let id = UUID()
+        let epoch = prepareEpoch
         let voice = options.voice
         let speed = options.speed
-        prepareTask = Task { [weak self] in
+        prepareTasks[id] = Task { [weak self] in
             guard let self else { return }
             do {
                 try Self.validate(text: text, voice: voice, speed: speed)
                 let samples = try await self.synthesize(text, voice, speed)
                 try Task.checkCancellation()
-                guard self.prepareGeneration == identity else { return }
+                guard self.prepareEpoch == epoch else { return }
                 let audio = try await Self.encode(samples)
                 try Task.checkCancellation()
-                guard self.prepareGeneration == identity else { return }
-                self.prepareTask = nil
+                guard self.prepareEpoch == epoch else { return }
+                self.prepareTasks[id] = nil
                 completion(.success(SpeechClip(audio: audio)))
             } catch {
-                guard self.prepareGeneration == identity, !Task.isCancelled else { return }
-                self.prepareTask = nil
+                guard self.prepareEpoch == epoch, !Task.isCancelled else { return }
+                self.prepareTasks[id] = nil
                 completion(.failure(error))
             }
         }
@@ -190,9 +234,9 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
         task = nil
         completion = nil
         playback.stop()
-        prepareGeneration = UUID()
-        prepareTask?.cancel()
-        prepareTask = nil
+        prepareEpoch = UUID()
+        prepareTasks.values.forEach { $0.cancel() }
+        prepareTasks.removeAll()
     }
 
     private func finish(_ result: Result<Void, Error>, identity: UUID) {

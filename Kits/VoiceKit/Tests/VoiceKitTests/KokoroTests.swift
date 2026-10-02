@@ -14,6 +14,8 @@ private actor SynthesisGate {
     func count() -> Int { pending.count }
     func finish(_ index: Int, result: Result<[Float], Error>) { pending[index].resume(with: result) }
     func lastSpeed() -> Double? { calls.last?.2 }
+    func texts() -> [String] { calls.map(\.0) }
+    func voices() -> [String] { calls.map(\.1) }
 }
 
 @MainActor
@@ -173,6 +175,70 @@ struct KokoroVoiceTests {
         voice.stop()
         #expect(events == [true, false])
         #expect(secondCompletions == 0)  // stopped, not finished
+    }
+
+    @Test func warmUpRunsOneTinySynthesisAndPlaysNothing() async throws {
+        let gate = SynthesisGate()
+        var players = 0
+        let voice = KokoroVoice(makePlayer: { _ in
+            players += 1
+            return try FakePlayer(data: silentWave())
+        }) { try await gate.run($0, $1, $2) }
+        voice.warmUp()
+        voice.warmUp()  // already warming
+        while await gate.count() < 1 { await Task.yield() }
+        await gate.finish(0, result: .success([0]))
+        for _ in 0..<20 { await Task.yield() }
+        voice.warmUp()  // already warm
+        for _ in 0..<20 { await Task.yield() }
+        #expect(await gate.count() == 1)
+        #expect(await gate.texts() == [KokoroVoice.warmUpText])
+        #expect(players == 0)
+        // Another voice is not warm yet.
+        voice.options.voice = "bm_george"
+        voice.warmUp()
+        while await gate.count() < 2 { await Task.yield() }
+        #expect(await gate.voices() == ["af_heart", "bm_george"])
+    }
+
+    @Test func aFailedWarmUpCanBeRetried() async throws {
+        struct Broken: Error {}
+        let gate = SynthesisGate()
+        let voice = KokoroVoice { try await gate.run($0, $1, $2) }
+        voice.warmUp()
+        while await gate.count() < 1 { await Task.yield() }
+        await gate.finish(0, result: .failure(Broken()))
+        for _ in 0..<20 { await Task.yield() }
+        voice.warmUp()
+        while await gate.count() < 2 { await Task.yield() }
+        #expect(await gate.count() == 2)
+    }
+
+    @Test func voicesForOneModelFolderShareAnEngine() {
+        let folder = URL(fileURLWithPath: "/models/kokoro")
+        #expect(KokoroVoice.engine(for: folder) === KokoroVoice.engine(for: URL(fileURLWithPath: "/models/kokoro/")))
+        #expect(KokoroVoice.engine(for: folder) !== KokoroVoice.engine(for: URL(fileURLWithPath: "/models/other")))
+    }
+
+    @Test func severalPreparationsRunAtOnceAndStopCancelsThemAll() async throws {
+        let gate = SynthesisGate()
+        let voice = KokoroVoice { try await gate.run($0, $1, $2) }
+        var results: [String] = []
+        voice.prepare("one") { if (try? $0.get()) != nil { results.append("one") } }
+        voice.prepare("two") { if (try? $0.get()) != nil { results.append("two") } }
+        while await gate.count() < 2 { await Task.yield() }
+        await gate.finish(1, result: .success([0]))
+        try await eventually { results == ["two"] }
+        await gate.finish(0, result: .success([0]))
+        try await eventually { results == ["two", "one"] }
+        voice.prepare("three") { _ in results.append("three") }
+        voice.prepare("four") { _ in results.append("four") }
+        while await gate.count() < 4 { await Task.yield() }
+        voice.stop()
+        await gate.finish(2, result: .success([0]))
+        await gate.finish(3, result: .success([0]))
+        for _ in 0..<20 { await Task.yield() }
+        #expect(results == ["two", "one"])
     }
 
     @Test func rejectedPlaybackReportsErrorWithoutSpeaking() async throws {
