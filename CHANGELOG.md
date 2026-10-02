@@ -35,28 +35,32 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   finds the window. `HUDPanelWindow.activeSpaceDidSettleNotification` makes the router push
   `state` when the value settles after a show.
 - VoiceKit: replies are spoken as they stream. `SpeechStreamer` starts on an early first chunk
-  (`SpeechChunker`: the first clause with five words, twelve words, or three words after a
-  400 ms pause), then speaks sentences, splitting one longer than 160 characters at a clause;
-  no cut leaves fewer than three words or falls inside inline markdown. A voice that can
+  (`SpeechChunker`: the first clause with five words, twelve words, or three whole words after
+  a 400 ms pause, never splitting a word still arriving), then speaks sentences, splitting one
+  longer than 160 characters at a clause; no cut leaves fewer than three words or falls inside
+  inline markdown. A voice that can
   prefetch synthesizes each chunk as soon as it is queued, up to `prefetchDepth` (2) ahead of
   the one playing, so speech is gapless when text arrives faster than it is spoken and pauses
   only between chunks when it does not.
 - VoiceKit: `SpeechVoice.warmUp()` (Kokoro loads its model and synthesizes a discarded word;
   other voices do nothing) and `SpeechStreamer.warmUp()`; `onChunkStarted` and
-  `onChunkFinished` for revealing a reply in step with the voice; `SpeechStreamMetrics` per
-  reply (time to the first chunk queued and to the first audio, chunks, underruns and their
-  silence), logged once and passed to `onMetrics`; `SpeechClock` and `SystemSpeechClock`.
+  `onChunkFinished` with a `SpeechChunk` (text, index and its range in the raw reply) for
+  revealing a reply in step with the voice; `SpeechStreamMetrics` per reply (time to the first
+  chunk queued and to the first audio, chunks, underruns and their silence, split into waiting
+  for text and for synthesis), logged once and passed to `onMetrics`; `SpeechClock` and
+  `SystemSpeechClock`; `KokoroVoice.unloadModels()`.
 
 ### Changed
 - VoiceKit: `SpeechStreamer(voice:maximumSentenceLength:)` is now
   `SpeechStreamer(voice:rules:prefetchDepth:clock:)` (`SpeechChunker.Rules.maximumLength`).
   With a prefetching voice the streamer always prepares and plays chunks, never calling
   `speak`, so a chunk is never synthesized twice.
-- VoiceKit: `PrefetchingSpeechVoice.prepare(_:completion:)` may run several preparations at
-  once (Kokoro and Grok no longer cancel an earlier one); `stop()` cancels them all.
+- VoiceKit: `PrefetchingSpeechVoice.prepare(_:completion:)` may have several preparations in
+  flight (Kokoro and Grok no longer cancel an earlier one; Kokoro synthesizes them in the order
+  asked); `stop()` cancels them all. A stream that fails stops its voice.
 - VoiceKit: `KokoroVoice(modelDirectory:)` voices for one model folder share one
-  `KokoroEngine`, so the model loads once per process and stays loaded instead of loading
-  again for each voice.
+  `KokoroEngine`, so the model loads once instead of again for each voice, and stays loaded
+  until `SpeechVoices.make` builds another kind of voice.
 - A panel `kind` HUDKit does not know is kept as `HUDManifest.Panel.Kind.unknown` and never
   shown, instead of being read as `windowed`. `dockSorted` leaves out widget and unknown kinds.
 - `HUDManifest.Panel.Kind` is no longer a `String` raw-value enum: `init(rawValue:)` cannot

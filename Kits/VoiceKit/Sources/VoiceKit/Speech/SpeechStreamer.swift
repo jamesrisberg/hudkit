@@ -15,14 +15,24 @@ public struct SpeechStreamMetrics: Sendable, Equatable {
     public var firstAudioMilliseconds: Int?
     /// Chunks that started playing.
     public var chunks: Int
-    /// Times a chunk ended with the next one not ready to play (its text or its audio still to
-    /// come), and the silence those waits added up to.
+    /// Times a chunk ended with the next one not ready to play, and the silence those waits
+    /// added up to.
     public var underruns: Int
     public var underrunMilliseconds: Int
+    /// The part of those waits spent with no next chunk queued yet (the reply's text was
+    /// slower than speech), and the waits that had such a part.
+    public var textUnderruns: Int
+    public var textUnderrunMilliseconds: Int
+    /// The part spent with the next chunk queued but its audio still being synthesized, and
+    /// the waits that had such a part.
+    public var synthesisUnderruns: Int
+    public var synthesisUnderrunMilliseconds: Int
 
     public init(
         outcome: Outcome, firstChunkQueuedMilliseconds: Int?, firstAudioMilliseconds: Int?,
-        chunks: Int, underruns: Int, underrunMilliseconds: Int
+        chunks: Int, underruns: Int, underrunMilliseconds: Int,
+        textUnderruns: Int, textUnderrunMilliseconds: Int,
+        synthesisUnderruns: Int, synthesisUnderrunMilliseconds: Int
     ) {
         self.outcome = outcome
         self.firstChunkQueuedMilliseconds = firstChunkQueuedMilliseconds
@@ -30,6 +40,28 @@ public struct SpeechStreamMetrics: Sendable, Equatable {
         self.chunks = chunks
         self.underruns = underruns
         self.underrunMilliseconds = underrunMilliseconds
+        self.textUnderruns = textUnderruns
+        self.textUnderrunMilliseconds = textUnderrunMilliseconds
+        self.synthesisUnderruns = synthesisUnderruns
+        self.synthesisUnderrunMilliseconds = synthesisUnderrunMilliseconds
+    }
+}
+
+/// A chunk of a reply as `SpeechStreamer` speaks it.
+public struct SpeechChunk: Sendable, Equatable {
+    /// What is spoken: the chunk with its markdown stripped.
+    public let text: String
+    /// The chunk's place in the reply, from 0.
+    public let index: Int
+    /// Where the chunk lies in all the text appended for this reply, in `Character` offsets,
+    /// markdown included: the host can show the reply up to `rawRange.upperBound` while the
+    /// chunk plays.
+    public let rawRange: Range<Int>
+
+    public init(text: String, index: Int, rawRange: Range<Int>) {
+        self.text = text
+        self.index = index
+        self.rawRange = rawRange
     }
 }
 
@@ -54,10 +86,10 @@ public final class SpeechStreamer {
     /// (the rest is dropped). Never after `stop()`. Once it has run the stream is ended:
     /// `append` and `finish` are ignored until `stop()`.
     public var onFinished: ((Result<Void, Error>) -> Void)?
-    /// A chunk (its spoken text, and its index from 0 in this reply) starts playing.
-    public var onChunkStarted: ((String, Int) -> Void)?
+    /// A chunk starts playing.
+    public var onChunkStarted: ((SpeechChunk) -> Void)?
     /// A chunk finished playing; not called for a chunk cut off by `stop()` or a failure.
-    public var onChunkFinished: ((String, Int) -> Void)?
+    public var onChunkFinished: ((SpeechChunk) -> Void)?
     /// The reply's metrics, once per reply that received text: when it finishes, fails or is
     /// stopped.
     public var onMetrics: ((SpeechStreamMetrics) -> Void)?
@@ -67,8 +99,9 @@ public final class SpeechStreamer {
     public var isSpeaking: Bool { playing != nil || !pending.isEmpty }
 
     private struct Chunk {
-        let text: String
-        let index: Int
+        let spoken: SpeechChunk
+        var text: String { spoken.text }
+        var index: Int { spoken.index }
         var requested = false
         var clip: SpeechClip?
         var failure: Error?
@@ -82,8 +115,35 @@ public final class SpeechStreamer {
         var chunks = 0
         var underruns = 0
         var underrunSeconds: TimeInterval = 0
-        /// When the last chunk ended with the next one not ready.
-        var gapStart: TimeInterval?
+        var textUnderruns = 0
+        var textSeconds: TimeInterval = 0
+        var synthesisUnderruns = 0
+        var synthesisSeconds: TimeInterval = 0
+        /// The silence since a chunk ended with the next one not ready.
+        var gap: Gap?
+    }
+
+    /// One wait between chunks: for text while no chunk is queued, then for synthesis.
+    private struct Gap {
+        let start: TimeInterval
+        let beganWaitingForText: Bool
+        var waitingForText: Bool
+        var phaseStart: TimeInterval
+        var text: TimeInterval = 0
+        var synthesis: TimeInterval = 0
+
+        init(at now: TimeInterval, waitingForText: Bool) {
+            start = now
+            phaseStart = now
+            beganWaitingForText = waitingForText
+            self.waitingForText = waitingForText
+        }
+
+        /// Adds the time since `phaseStart` to the phase in progress.
+        mutating func closePhase(at now: TimeInterval) {
+            if waitingForText { text += now - phaseStart } else { synthesis += now - phaseStart }
+            phaseStart = now
+        }
     }
 
     private static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "VoiceKit", category: "speech")
@@ -172,15 +232,21 @@ public final class SpeechStreamer {
 
     /// Queues a chunk with its markdown stripped. A chunk with nothing left to say (a code
     /// fence or a line inside one) is dropped, and the next chunk may still come early.
-    private func enqueue(_ raw: String) {
-        guard let cleaned = markdownFilter.filter(raw)?.trimmingCharacters(in: .whitespacesAndNewlines),
+    private func enqueue(_ raw: SpeechChunker.Chunk) {
+        guard let cleaned = markdownFilter.filter(raw.text)?.trimmingCharacters(in: .whitespacesAndNewlines),
               !cleaned.isEmpty else {
             if nextIndex == 0 { chunker.releasesEarly = true }
             return
         }
-        pending.append(Chunk(text: cleaned, index: nextIndex))
+        pending.append(Chunk(spoken: SpeechChunk(text: cleaned, index: nextIndex, rawRange: raw.rawRange)))
         nextIndex += 1
-        if meter.firstQueued == nil { meter.firstQueued = clock.now }
+        let now = clock.now
+        if meter.firstQueued == nil { meter.firstQueued = now }
+        if var gap = meter.gap, gap.waitingForText {
+            gap.closePhase(at: now)
+            gap.waitingForText = false
+            meter.gap = gap
+        }
     }
 
     /// Releases the first chunk early once enough words have waited `rules.idleDelay` with no
@@ -227,26 +293,35 @@ public final class SpeechStreamer {
         playing = chunk
         let now = clock.now
         if meter.firstAudio == nil { meter.firstAudio = now }
-        if let gapStart = meter.gapStart {
+        if var gap = meter.gap {
+            gap.closePhase(at: now)
             meter.underruns += 1
-            meter.underrunSeconds += now - gapStart
-            meter.gapStart = nil
+            meter.underrunSeconds += now - gap.start
+            if gap.beganWaitingForText || gap.text > 0 {
+                meter.textUnderruns += 1
+                meter.textSeconds += gap.text
+            }
+            if !gap.beganWaitingForText || gap.synthesis > 0 {
+                meter.synthesisUnderruns += 1
+                meter.synthesisSeconds += gap.synthesis
+            }
+            meter.gap = nil
         }
         meter.chunks += 1
         let identity = generation
-        onChunkStarted?(chunk.text, chunk.index)
+        onChunkStarted?(chunk.spoken)
         guard generation == identity else { return }
         play { [weak self] result in
             guard let self, self.generation == identity, self.playing?.index == chunk.index else { return }
             self.playing = nil
             switch result {
             case .success:
-                self.onChunkFinished?(chunk.text, chunk.index)
+                self.onChunkFinished?(chunk.spoken)
                 guard self.generation == identity else { return }
                 self.advance()
                 // Nothing started in its place: the silence until the next chunk is an underrun.
                 if self.generation == identity, self.playing == nil, !self.ended {
-                    self.meter.gapStart = self.clock.now
+                    self.meter.gap = Gap(at: self.clock.now, waitingForText: self.pending.isEmpty)
                 }
             case .failure(let error):
                 self.complete(.failure(error))
@@ -278,10 +353,16 @@ public final class SpeechStreamer {
         }
     }
 
+    /// Ends the stream. A failure also stops the voice, which cancels the chunks still being
+    /// synthesized ahead so they do not hold up the next reply's synthesis.
     private func complete(_ result: Result<Void, Error>) {
-        if case .failure = result { report(.failed) } else { report(.finished) }
+        let failed: Bool
+        if case .failure = result { failed = true } else { failed = false }
+        let hadWork = isSpeaking
+        report(failed ? .failed : .finished)
         reset()
         ended = true
+        if failed, hadWork { voice.stop() }
         onFinished?(result)
     }
 
@@ -294,7 +375,10 @@ public final class SpeechStreamer {
             firstChunkQueuedMilliseconds: meter.firstQueued.map { milliseconds($0 - firstText) },
             firstAudioMilliseconds: meter.firstAudio.map { milliseconds($0 - firstText) },
             chunks: meter.chunks, underruns: meter.underruns,
-            underrunMilliseconds: milliseconds(meter.underrunSeconds))
+            underrunMilliseconds: milliseconds(meter.underrunSeconds),
+            textUnderruns: meter.textUnderruns, textUnderrunMilliseconds: milliseconds(meter.textSeconds),
+            synthesisUnderruns: meter.synthesisUnderruns,
+            synthesisUnderrunMilliseconds: milliseconds(meter.synthesisSeconds))
         meter.firstText = nil
         lastMetrics = metrics
         let queued = Self.describe(metrics.firstChunkQueuedMilliseconds)
@@ -302,7 +386,9 @@ public final class SpeechStreamer {
         Self.log.notice("""
             Reply speech \(outcome.rawValue, privacy: .public): first chunk queued \(queued, privacy: .public), \
             first audio \(audio, privacy: .public), \(metrics.chunks) chunks, \
-            \(metrics.underruns) underruns (\(metrics.underrunMilliseconds) ms)
+            \(metrics.underruns) underruns (\(metrics.underrunMilliseconds) ms; waiting for text \
+            \(metrics.textUnderruns) for \(metrics.textUnderrunMilliseconds) ms, for synthesis \
+            \(metrics.synthesisUnderruns) for \(metrics.synthesisUnderrunMilliseconds) ms)
             """)
         onMetrics?(metrics)
     }
