@@ -12,11 +12,14 @@ import AppKit
 /// | `quit` | replies, then `host.quit()` |
 /// | `menu` | → `{items:[{id, title, kind: item/separator/submenu, enabled, state: on/off/mixed, keyEquivalent?, modifiers?, items?}]}`, the app's status menu (`menuProvider`, see `HUDMenuBridge`); `{ok:false, error:"no menu"}` without a provider |
 /// | `menu-invoke` | `id=` (from `menu`) plus optional `title=` guard: replies, then performs the item on the main thread |
+/// | `widget` | `create/update/remove/list/sync/edit/reveal/schema` on the app's desktop widgets (`widgetHost`, see `HUDWidgetHost`); `{ok:false, error:"no widgets"}` without one |
 ///
 /// `menu` and `menu-invoke` are optional (`optionalVerbs`): `hello` lists them only when the
-/// app set `menuProvider`. `hello` also carries `statusItem` (visibility and the host it
-/// follows) once the app attached a `HUDStatusItemPolicy`, and `settings` then serves the
-/// policy's `menuBar.consumed` opt-out alongside the host's own settings.
+/// app set `menuProvider`. `widget` likewise (`widgetVerb`): listed only when the app set
+/// `widgetHost`, whose user changes the router publishes as `widget` events. `hello` also
+/// carries `statusItem` (visibility and the host it follows) once the app attached a
+/// `HUDStatusItemPolicy`, and `settings` then serves the policy's `menuBar.consumed` opt-out
+/// alongside the host's own settings.
 ///
 /// File drops: a panel whose manifest `capabilities` include `acceptsFileDrop`
 /// (`HUDDrop.capability`) gets files dropped on its MacHUD dock button as
@@ -47,6 +50,15 @@ public final class HUDControlRouter {
     public static let requiredVerbs = ["hello", "panel", "state", "subscribe", "settings", "action", "quit"]
     /// Served by every router, but only listed in `hello` when `menuProvider` is set.
     public static let optionalVerbs = ["menu", "menu-invoke"]
+    /// Served by every router, but only listed in `hello` when `widgetHost` is set.
+    public static let widgetVerb = "widget"
+    /// The app's desktop widgets, served by the `widget` verb. Setting it routes the host's
+    /// user changes (`onEvent`) to subscribers as `{"event": "widget", ...}`.
+    public var widgetHost: HUDWidgetHost? {
+        didSet {
+            widgetHost?.onEvent = { [weak server] payload in server?.publish("widget", payload: payload) }
+        }
+    }
     /// The app's status menu for `menu`/`menu-invoke`, e.g. `{ [weak self] in self?.statusItem.menu }`.
     public var menuProvider: (() -> NSMenu?)?
     /// The status item policy `hello` and `settings` report; defaults to the first one this
@@ -76,7 +88,7 @@ public final class HUDControlRouter {
             forName: HUDPanelWindow.activeSpaceDidSettleNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.publishState() }
         })
-        for verb in Self.requiredVerbs + Self.optionalVerbs where verb != "subscribe" {
+        for verb in Self.requiredVerbs + Self.optionalVerbs + [Self.widgetVerb] where verb != "subscribe" {
             server.register(verb) { [weak self] args, done in
                 guard let self else { done(["ok": false, "error": "router gone"]); return }
                 self.handle(verb, args: args, done: done)
@@ -104,7 +116,8 @@ public final class HUDControlRouter {
             case "hello":
                 var r: [String: Any] = ["ok": true, "hudkit": HUDKit.version,
                                         "panels": host.panelDescriptors.map(\.json),
-                                        "verbs": Self.requiredVerbs + (menuProvider == nil ? [] : Self.optionalVerbs)]
+                                        "verbs": Self.requiredVerbs + (menuProvider == nil ? [] : Self.optionalVerbs)
+                                            + (widgetHost == nil ? [] : [Self.widgetVerb])]
                 if let manifest { r["app"] = manifest.id; r["name"] = manifest.name }
                 if let appVersion { r["version"] = appVersion }
                 if let statusItemPolicy { r["statusItem"] = statusItemPolicy.json }
@@ -189,6 +202,9 @@ public final class HUDControlRouter {
                 done(["ok": true, "id": id, "title": item.title])
                 // After the reply, so an item that quits or opens a modal does not hold it up.
                 DispatchQueue.main.async { MainActor.assumeIsolated { HUDMenuBridge.perform(item) } }
+            case Self.widgetVerb:
+                guard let widgetHost else { throw HUDControlError.invalid("no widgets") }
+                done(widgetHost.handle(args))
             case "quit":
                 done(["ok": true])
                 DispatchQueue.main.async { [weak host] in host?.quit() }
