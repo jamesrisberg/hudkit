@@ -53,6 +53,10 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
     /// preparation that outlives its cancellation never completes.
     private var prepareEpoch = UUID()
     private var prepareTasks: [UUID: Task<Void, Never>] = [:]
+    /// The last preparation's synthesis: the next one waits for it, so preparations reach the
+    /// synthesizer one at a time in the order they were asked for, and the clip wanted first
+    /// is never queued behind a later one.
+    private var synthesisTail: Task<[Float], Error>?
     /// The voice id warmed, or being warmed.
     private var warmVoice: String?
 
@@ -68,9 +72,17 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
         return engine
     }
 
+    /// Lets go of every shared model, for when Kokoro is no longer the reply voice
+    /// (`SpeechVoices.make` calls it when it builds another voice). A model's memory is freed
+    /// once the voices still using it are gone; the next `KokoroVoice(modelDirectory:)` loads
+    /// it again.
+    public static func unloadModels() {
+        engines.removeAll()
+    }
+
     /// Kokoro loaded from an installed model folder (`KokoroModels.directory(in:)`). The loaded
-    /// model is kept for the life of the process and shared with every other `KokoroVoice` for
-    /// the same folder.
+    /// model is shared with every other `KokoroVoice` for the same folder and kept until
+    /// `unloadModels()`.
     public convenience init(modelDirectory: URL, options: VoiceSettings.Kokoro = .init()) {
         let engine = Self.engine(for: modelDirectory)
         self.init(options: options, warm: { voice in try await engine.warmUp(voice: voice) }) { text, voice, speed in
@@ -183,18 +195,30 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
 
     /// Synthesizes `text` without playing it, so it can be handed to `play(_:completion:)` once
     /// its turn comes. Runs independently of `speak`/`play`'s own generation, so it can proceed
-    /// while another clip plays; several can be in flight (the engine runs them one at a time,
-    /// in the order asked), and `stop()` cancels them all.
+    /// while another clip plays. Several can be in flight: each synthesis starts when the one
+    /// asked for before it has finished, and `stop()` cancels them all.
     public func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
         let id = UUID()
         let epoch = prepareEpoch
         let voice = options.voice
         let speed = options.speed
+        let synthesize = synthesize
+        let previous = synthesisTail
+        let synthesis = Task<[Float], Error> {
+            _ = await previous?.result
+            try Task.checkCancellation()
+            try Self.validate(text: text, voice: voice, speed: speed)
+            return try await synthesize(text, voice, speed)
+        }
+        synthesisTail = synthesis
         prepareTasks[id] = Task { [weak self] in
-            guard let self else { return }
             do {
-                try Self.validate(text: text, voice: voice, speed: speed)
-                let samples = try await self.synthesize(text, voice, speed)
+                let samples = try await withTaskCancellationHandler {
+                    try await synthesis.value
+                } onCancel: {
+                    synthesis.cancel()
+                }
+                guard let self else { return }
                 try Task.checkCancellation()
                 guard self.prepareEpoch == epoch else { return }
                 let audio = try await Self.encode(samples)
@@ -203,7 +227,7 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
                 self.prepareTasks[id] = nil
                 completion(.success(SpeechClip(audio: audio)))
             } catch {
-                guard self.prepareEpoch == epoch, !Task.isCancelled else { return }
+                guard let self, self.prepareEpoch == epoch, !Task.isCancelled else { return }
                 self.prepareTasks[id] = nil
                 completion(.failure(error))
             }
@@ -237,6 +261,7 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
         prepareEpoch = UUID()
         prepareTasks.values.forEach { $0.cancel() }
         prepareTasks.removeAll()
+        synthesisTail = nil
     }
 
     private func finish(_ result: Result<Void, Error>, identity: UUID) {
