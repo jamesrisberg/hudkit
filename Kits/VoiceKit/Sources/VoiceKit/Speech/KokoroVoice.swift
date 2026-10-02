@@ -48,15 +48,15 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
     private var generation = UUID()
     private var task: Task<Void, Never>?
     private var completion: ((Result<Void, Error>) -> Void)?
-    /// `prepare(_:completion:)` syntheses in flight, tracked apart from `generation`/`task` so
-    /// they can run while a different clip plays. `stop()` replaces `prepareEpoch`, so a
-    /// preparation that outlives its cancellation never completes.
+    /// `prepare(_:completion:)` requests not yet started, oldest first. One task, `preparer`,
+    /// takes them in this order and synthesizes, encodes and completes each before taking the
+    /// next, so the synthesizer sees them, and their completions run, in the order asked for.
+    /// This runs apart from `generation`/`task`, so it can proceed while a different clip plays.
+    private var preparations: [Preparation] = []
+    private var preparer: Task<Void, Never>?
+    /// Replaced by `stop()`, so a preparation that outlives its cancellation never completes
+    /// and the cancelled `preparer` takes nothing more from the queue.
     private var prepareEpoch = UUID()
-    private var prepareTasks: [UUID: Task<Void, Never>] = [:]
-    /// The last preparation's synthesis: the next one waits for it, so preparations reach the
-    /// synthesizer one at a time in the order they were asked for, and the clip wanted first
-    /// is never queued behind a later one.
-    private var synthesisTail: Task<[Float], Error>?
     /// The voice id warmed, or being warmed.
     private var warmVoice: String?
 
@@ -195,43 +195,55 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
 
     /// Synthesizes `text` without playing it, so it can be handed to `play(_:completion:)` once
     /// its turn comes. Runs independently of `speak`/`play`'s own generation, so it can proceed
-    /// while another clip plays. Several can be in flight: each synthesis starts when the one
-    /// asked for before it has finished, and `stop()` cancels them all.
+    /// while another clip plays. Several can be asked for at once: they are synthesized one at
+    /// a time in the order asked for, each completion runs before the next synthesis starts,
+    /// and `stop()` cancels them all.
     public func prepare(_ text: String, completion: @escaping (Result<SpeechClip, Error>) -> Void) {
-        let id = UUID()
+        preparations.append(Preparation(text: text, voice: options.voice, speed: options.speed, completion: completion))
+        guard preparer == nil else { return }
         let epoch = prepareEpoch
-        let voice = options.voice
-        let speed = options.speed
         let synthesize = synthesize
-        let previous = synthesisTail
-        let synthesis = Task<[Float], Error> {
-            _ = await previous?.result
-            try Task.checkCancellation()
-            try Self.validate(text: text, voice: voice, speed: speed)
-            return try await synthesize(text, voice, speed)
-        }
-        synthesisTail = synthesis
-        prepareTasks[id] = Task { [weak self] in
-            do {
-                let samples = try await withTaskCancellationHandler {
-                    try await synthesis.value
-                } onCancel: {
-                    synthesis.cancel()
+        preparer = Task { [weak self] in
+            while let next = self?.nextPreparation(epoch: epoch) {
+                let result: Result<SpeechClip, Error>
+                do {
+                    result = .success(SpeechClip(audio: try await Self.render(
+                        next.text, voice: next.voice, speed: next.speed, synthesize: synthesize)))
+                } catch {
+                    result = .failure(error)
                 }
-                guard let self else { return }
-                try Task.checkCancellation()
-                guard self.prepareEpoch == epoch else { return }
-                let audio = try await Self.encode(samples)
-                try Task.checkCancellation()
-                guard self.prepareEpoch == epoch else { return }
-                self.prepareTasks[id] = nil
-                completion(.success(SpeechClip(audio: audio)))
-            } catch {
                 guard let self, self.prepareEpoch == epoch, !Task.isCancelled else { return }
-                self.prepareTasks[id] = nil
-                completion(.failure(error))
+                next.completion(result)
             }
         }
+    }
+
+    private struct Preparation {
+        let text: String
+        let voice: String
+        let speed: Double
+        let completion: (Result<SpeechClip, Error>) -> Void
+    }
+
+    /// The oldest waiting preparation, or nil once `stop()` has replaced `epoch` or the queue
+    /// is empty; an empty queue also retires `preparer`, so the next `prepare` starts another.
+    private func nextPreparation(epoch: UUID) -> Preparation? {
+        guard prepareEpoch == epoch else { return nil }
+        guard !preparations.isEmpty else {
+            preparer = nil
+            return nil
+        }
+        return preparations.removeFirst()
+    }
+
+    private nonisolated static func render(
+        _ text: String, voice: String, speed: Double, synthesize: Synthesizer
+    ) async throws -> Data {
+        try Task.checkCancellation()
+        try validate(text: text, voice: voice, speed: speed)
+        let samples = try await synthesize(text, voice, speed)
+        try Task.checkCancellation()
+        return try wave(samples)
     }
 
     /// Plays a clip `prepare(_:completion:)` already produced. Unlike `speak`, this does not
@@ -259,9 +271,9 @@ public final class KokoroVoice: PrefetchingSpeechVoice {
         completion = nil
         playback.stop()
         prepareEpoch = UUID()
-        prepareTasks.values.forEach { $0.cancel() }
-        prepareTasks.removeAll()
-        synthesisTail = nil
+        preparer?.cancel()
+        preparer = nil
+        preparations.removeAll()
     }
 
     private func finish(_ result: Result<Void, Error>, identity: UUID) {
