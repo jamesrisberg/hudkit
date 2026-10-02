@@ -41,6 +41,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   panel.
 
 ### Fixed
+- The app template's `--snapshot` serves no control socket, registers no hotkey and adds no
+  menu bar item, so a snapshot cannot take a running app's socket name or announce itself to
+  MacHUD. The compliance checklist and CONVENTIONS state the rule for every app.
 - Hover panels and dock labels appear on the Space the user is on, every time. The window
   server can drop a window's all-Spaces membership while AppKit still reports
   `.canJoinAllSpaces`, which left a panel answering `visible: true` from another desktop; every
