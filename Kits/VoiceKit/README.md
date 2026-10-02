@@ -103,14 +103,18 @@ complete:
 
 - The first chunk ends at the first clause boundary (`,` `;` `:` `—` `–`; not "1,000",
   "10:30" or "3–5") with at least 5 words before it, or at a word boundary once it has 12
-  words, or, when at least 3 words have waited 400 ms with no new text, with what has arrived.
+  words, or, when at least 3 words have waited 400 ms with no new text, with what has arrived:
+  all of it when it ends in sentence or clause punctuation, else up to the last space, since
+  the last word may still be arriving ("I fou" before "nd").
 - Every later chunk is a sentence (`SentenceSplitter`: `.`, `!`, `?`, `…` followed by
   whitespace, or a line break; not after common abbreviations, initialisms such as "U.S.", a
   list number opening a sentence, or inside a decimal). A sentence longer than 160 characters
   is split at its last clause boundary within them; a run of 280 characters with no ending is
   cut at a space.
 - A cut inside a sentence leaves at least 3 words on each side and never falls inside inline
-  markdown; a complete sentence is a chunk whatever its length ("Sure.").
+  markdown; a complete sentence is a chunk whatever its length ("Sure."). Only whole words
+  count: not a last word that may still be arriving, markdown markers ("##", "-") or a list
+  number.
 
 `SpeechChunker.Rules` holds those numbers. `MarkdownSpeechFilter` cleans each chunk before it is
 queued: heading and list markers are dropped, emphasis markers are removed (the emphasized
@@ -129,17 +133,23 @@ prefetch speaks each chunk with `speak(_:completion:)`. `ClipPlayback` (the clip
 uninterrupted span: `onSpeakingChanged` does not flicker false-then-true at a chunk boundary,
 only going false once nothing plays next.
 
-`onChunkStarted(text, index)` and `onChunkFinished(text, index)` report each spoken chunk (its
-cleaned text, numbered from 0 in the reply), so a host can reveal the reply in step with the
-voice; `warmUp()` passes through to the voice. Once per reply that received text (when it
+`onChunkStarted` and `onChunkFinished` report each spoken chunk as a `SpeechChunk`: its cleaned
+text, its index from 0 in the reply, and `rawRange`, its `Character` offsets in everything
+appended for the reply (markdown included), so a host can reveal the reply up to the end of the
+chunk being spoken. `warmUp()` passes through to the voice. A failure also stops the voice, so
+chunks still being synthesized ahead do not delay the next reply. Once per reply that received text (when it
 finishes, fails or is stopped) the streamer logs a `SpeechStreamMetrics` line under the app's
 subsystem, category `speech`, and passes it to `onMetrics`: the time from the first text to the
 first chunk queued and to the first chunk playing, the chunks played, and the underruns (a
-chunk ended with the next not ready) with their total silence. Time comes from a `SpeechClock`,
+chunk ended with the next not ready) with their total silence, split into waiting for text and
+waiting for synthesis. Time comes from a `SpeechClock`,
 `SystemSpeechClock` unless the host or a test passes another.
 
 `KokoroVoice(modelDirectory:)` voices for one model folder share one `KokoroEngine`, so the
-model loads once per process and stays loaded; a voice made for each reply starts warm.
+model loads once and a voice made for each reply starts warm. It stays loaded until
+`KokoroVoice.unloadModels()`, which `SpeechVoices.make` calls whenever it builds a voice other
+than Kokoro. `KokoroVoice` hands its preparations to the model one at a time, in the order they
+were asked for.
 
 An app that ships `KokoroVoice` must carry MLX's Metal library and Misaki's lexicons:
 `hud-build.sh` copies the `mlx-swift_Cmlx.bundle` and `Misaki_Misaki.bundle` resource bundles

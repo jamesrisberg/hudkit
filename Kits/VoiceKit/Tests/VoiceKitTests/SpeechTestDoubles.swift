@@ -40,6 +40,8 @@ final class TimedVoice: PrefetchingSpeechVoice {
     let clock: ManualSpeechClock
     var synthesisLatency: TimeInterval
     var secondsPerWord: TimeInterval
+    /// Texts whose synthesis fails.
+    var failing: Set<String> = []
     private(set) var prepared: [String] = []
     private(set) var spans: [(text: String, start: TimeInterval, end: TimeInterval)] = []
     private(set) var stops = 0
@@ -60,8 +62,10 @@ final class TimedVoice: PrefetchingSpeechVoice {
         prepared.append(text)
         let done = max(clock.now, synthesisFree) + synthesisLatency
         synthesisFree = done
+        let fails = failing.contains(text)
         timers.append(clock.schedule(after: done - clock.now) {
-            completion(.success(SpeechClip(audio: Data(text.utf8))))
+            struct Failed: Error {}
+            completion(fails ? .failure(Failed()) : .success(SpeechClip(audio: Data(text.utf8))))
         })
     }
 

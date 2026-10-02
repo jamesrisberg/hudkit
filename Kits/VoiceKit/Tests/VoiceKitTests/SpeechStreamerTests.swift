@@ -309,9 +309,9 @@ struct SpeechStreamerTests {
     @Test func theFirstChunkIsReleasedEarlyAtAClause() {
         let voice = RecordingVoice()
         let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
-        streamer.append("Well, the build failed because, as it turns")
+        streamer.append("Well, the build failed because, as it turns out")
         #expect(voice.spoken == ["Well, the build failed because,"])
-        streamer.append(" out, the cache was stale. ")
+        streamer.append(", the cache was stale. ")
         voice.finishCurrent()
         #expect(voice.spoken == ["Well, the build failed because,", "as it turns out, the cache was stale."])
     }
@@ -329,20 +329,21 @@ struct SpeechStreamerTests {
         clock.advance(by: 0.399)
         #expect(voice.spoken.isEmpty)
         clock.advance(by: 0.001)
-        #expect(voice.spoken == ["Let me check the"])
+        // "the" may be the start of a longer word, so it waits for the next text.
+        #expect(voice.spoken == ["Let me check"])
         // Later chunks wait for their sentence however long the pause.
         streamer.append(" logs now")
         clock.advance(by: 5)
         voice.finishCurrent()
-        #expect(voice.spoken == ["Let me check the"])
+        #expect(voice.spoken == ["Let me check"])
         streamer.append(". ")
-        #expect(voice.spoken == ["Let me check the", "logs now."])
+        #expect(voice.spoken == ["Let me check", "the logs now."])
     }
 
     @Test func aChunkFilteredAwayDoesNotCountAsTheFirst() {
         let voice = RecordingVoice()
         let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
-        streamer.append("```\nlet x = 1\n```\nWell, the build failed because, as it turns")
+        streamer.append("```\nlet x = 1\n```\nWell, the build failed because, as it turns out")
         #expect(voice.spoken == ["Well, the build failed because,"])
     }
 
@@ -350,8 +351,8 @@ struct SpeechStreamerTests {
         let voice = RecordingVoice()
         let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
         var events: [String] = []
-        streamer.onChunkStarted = { events.append("start \($1) \($0)") }
-        streamer.onChunkFinished = { events.append("end \($1) \($0)") }
+        streamer.onChunkStarted = { events.append("start \($0.index) \($0.text)") }
+        streamer.onChunkFinished = { events.append("end \($0.index) \($0.text)") }
         streamer.append("One. **Two** more. ")
         #expect(events == ["start 0 One."])
         voice.finishCurrent()
@@ -387,7 +388,8 @@ struct SpeechStreamerTests {
         voice.finishCurrent()
         #expect(reports == [SpeechStreamMetrics(
             outcome: .finished, firstChunkQueuedMilliseconds: 0, firstAudioMilliseconds: 250,
-            chunks: 2, underruns: 1, underrunMilliseconds: 200)])
+            chunks: 2, underruns: 1, underrunMilliseconds: 200, textUnderruns: 0,
+            textUnderrunMilliseconds: 0, synthesisUnderruns: 1, synthesisUnderrunMilliseconds: 200)])
         #expect(streamer.lastMetrics == reports.first)
         streamer.stop()
         #expect(reports.count == 1)
@@ -407,7 +409,60 @@ struct SpeechStreamerTests {
         streamer.stop()
         #expect(reports == [SpeechStreamMetrics(
             outcome: .stopped, firstChunkQueuedMilliseconds: 500, firstAudioMilliseconds: 500,
-            chunks: 1, underruns: 0, underrunMilliseconds: 0)])
+            chunks: 1, underruns: 0, underrunMilliseconds: 0, textUnderruns: 0,
+            textUnderrunMilliseconds: 0, synthesisUnderruns: 0, synthesisUnderrunMilliseconds: 0)])
+    }
+
+    @Test func underrunsSeparateWaitingForTextFromWaitingForSynthesis() {
+        let clock = ManualSpeechClock()
+        let voice = RecordingPrefetchingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var metrics: SpeechStreamMetrics?
+        streamer.onMetrics = { metrics = $0 }
+        streamer.append("One. ")
+        voice.finishPrepare("One.")
+        clock.advance(by: 1)
+        voice.finishCurrent()  // nothing queued: waiting for text
+        clock.advance(by: 0.3)
+        streamer.append("Two. ")  // queued: now waiting for its synthesis
+        clock.advance(by: 0.2)
+        voice.finishPrepare("Two.")
+        streamer.finish()
+        voice.finishCurrent()
+        #expect(metrics == SpeechStreamMetrics(
+            outcome: .finished, firstChunkQueuedMilliseconds: 0, firstAudioMilliseconds: 0,
+            chunks: 2, underruns: 1, underrunMilliseconds: 500, textUnderruns: 1,
+            textUnderrunMilliseconds: 300, synthesisUnderruns: 1, synthesisUnderrunMilliseconds: 200))
+    }
+
+    @Test func chunksCarryTheirRangeInTheRawReply() {
+        let voice = RecordingVoice()
+        let streamer = SpeechStreamer(voice: voice, clock: ManualSpeechClock())
+        var chunks: [SpeechChunk] = []
+        streamer.onChunkStarted = { chunks.append($0) }
+        streamer.append("**One** two three. Four five six. ")
+        voice.finishCurrent()
+        #expect(chunks == [
+            SpeechChunk(text: "One two three.", index: 0, rawRange: 0..<18),
+            SpeechChunk(text: "Four five six.", index: 1, rawRange: 19..<33),
+        ])
+    }
+
+    @Test func aFailureStopsSynthesisAheadSoItCannotDelayTheNextReply() {
+        struct Broken: Error {}
+        let clock = ManualSpeechClock()
+        let voice = TimedVoice(clock: clock, synthesisLatency: 0.3, secondsPerWord: 0.3)
+        voice.failing = ["One."]
+        let streamer = SpeechStreamer(voice: voice, clock: clock)
+        var results: [Bool] = []
+        streamer.onFinished = { results.append((try? $0.get()) != nil) }
+        streamer.append("One. Two. Three. ")
+        #expect(voice.prepared == ["One.", "Two.", "Three."])
+        clock.advance(by: 0.3)
+        #expect(results == [false])
+        #expect(voice.stops == 1)
+        clock.advance(by: 5)
+        #expect(voice.spans.isEmpty)
     }
 
     @Test func aFastStreamIsSpokenWithoutGaps() throws {
@@ -461,6 +516,7 @@ struct SpeechStreamerTests {
         let measured = try #require(metrics)
         #expect(measured.underruns > 0)
         #expect(measured.underrunMilliseconds > 0)
+        #expect(measured.textUnderruns > 0)
     }
 
     @Test func stopMidReplyDropsEverything() {
@@ -470,7 +526,7 @@ struct SpeechStreamerTests {
         var started = 0
         var finished = 0
         var metrics: SpeechStreamMetrics?
-        streamer.onChunkStarted = { _, _ in started += 1 }
+        streamer.onChunkStarted = { _ in started += 1 }
         streamer.onFinished = { _ in finished += 1 }
         streamer.onMetrics = { metrics = $0 }
         streamer.append("Okay, so the build failed, because the cache was stale. I cleared it. It works now. ")
