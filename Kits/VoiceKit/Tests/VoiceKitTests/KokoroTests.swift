@@ -220,25 +220,44 @@ struct KokoroVoiceTests {
         #expect(KokoroVoice.engine(for: folder) !== KokoroVoice.engine(for: URL(fileURLWithPath: "/models/other")))
     }
 
-    @Test func severalPreparationsRunAtOnceAndStopCancelsThemAll() async throws {
+    @Test func preparationsReachTheSynthesizerInOrderAndStopCancelsThemAll() async throws {
         let gate = SynthesisGate()
         let voice = KokoroVoice { try await gate.run($0, $1, $2) }
         var results: [String] = []
         voice.prepare("one") { if (try? $0.get()) != nil { results.append("one") } }
         voice.prepare("two") { if (try? $0.get()) != nil { results.append("two") } }
-        while await gate.count() < 2 { await Task.yield() }
-        await gate.finish(1, result: .success([0]))
-        try await eventually { results == ["two"] }
+        while await gate.count() < 1 { await Task.yield() }
+        for _ in 0..<20 { await Task.yield() }
+        #expect(await gate.texts() == ["one"])  // "two" waits for "one"
         await gate.finish(0, result: .success([0]))
-        try await eventually { results == ["two", "one"] }
+        while await gate.count() < 2 { await Task.yield() }
+        #expect(await gate.texts() == ["one", "two"])
+        await gate.finish(1, result: .success([0]))
+        try await eventually { results == ["one", "two"] }
         voice.prepare("three") { _ in results.append("three") }
         voice.prepare("four") { _ in results.append("four") }
-        while await gate.count() < 4 { await Task.yield() }
+        while await gate.count() < 3 { await Task.yield() }
         voice.stop()
         await gate.finish(2, result: .success([0]))
-        await gate.finish(3, result: .success([0]))
         for _ in 0..<20 { await Task.yield() }
-        #expect(results == ["two", "one"])
+        #expect(results == ["one", "two"])
+        #expect(await gate.texts() == ["one", "two", "three"])  // "four" never started
+        // After a stop, a new preparation does not wait for the cancelled ones.
+        voice.prepare("five") { if (try? $0.get()) != nil { results.append("five") } }
+        while await gate.count() < 4 { await Task.yield() }
+        await gate.finish(3, result: .success([0]))
+        try await eventually { results == ["one", "two", "five"] }
+    }
+
+    @Test func choosingAnotherVoiceUnloadsTheSharedKokoroModel() {
+        let folder = URL(fileURLWithPath: "/models/kokoro-unload")
+        let engine = KokoroVoice.engine(for: folder)
+        #expect(KokoroVoice.engine(for: folder) === engine)
+        var settings = VoiceSettings()
+        settings.replyVoice = .system
+        let voice = SpeechVoices.make(for: settings, kokoroModelDirectory: folder, secrets: InMemoryVoiceSecretStore())
+        #expect(voice.kind == .system)
+        #expect(KokoroVoice.engine(for: folder) !== engine)
     }
 
     @Test func rejectedPlaybackReportsErrorWithoutSpeaking() async throws {

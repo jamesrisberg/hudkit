@@ -14,6 +14,8 @@ public enum SpeechVoices {
         let kind = settings.effectiveReplyVoice(
             kokoroReady: ModelStore.isInstalled(KokoroModels.manifest, in: kokoroModelDirectory),
             grokKeyAvailable: !grokKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        // Kokoro's shared model stays loaded only while Kokoro is the voice in use.
+        if kind != .kokoro { KokoroVoice.unloadModels() }
         switch kind {
         case .kokoro:
             return KokoroVoice(modelDirectory: kokoroModelDirectory, options: settings.kokoro)
