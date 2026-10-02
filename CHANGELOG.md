@@ -7,6 +7,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Fixed
+- `hud-catalog.sh` lists an app that serves only widgets with kind `widget`, and takes an app's kind from its first hover or windowed panel (a panel without a kind is windowed, as in the manifest).
+
 ## [0.3.0] - 2026-10-02
 
 ### Added
