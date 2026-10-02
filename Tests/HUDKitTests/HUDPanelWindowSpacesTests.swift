@@ -96,6 +96,19 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
         XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.hoverCollectionBehavior, "HUDAnimation.fadeIn")
     }
 
+    func testDockLabelShowRestoresItsSpacesBehaviour() {
+        let label = HUDDockLabelWindow()
+        windows.append(label)
+        XCTAssertEqual(label.collectionBehavior, HUDDockLabelWindow.spacesBehavior)
+        label.collectionBehavior = [.managed]
+        label.show(at: CGRect(x: 4, y: 4, width: 10, height: 10))
+        XCTAssertEqual(label.collectionBehavior, HUDDockLabelWindow.spacesBehavior, "show (orderFront)")
+        label.hide(animated: false)
+        label.collectionBehavior = []
+        label.orderFrontRegardless()
+        XCTAssertEqual(label.collectionBehavior, HUDDockLabelWindow.spacesBehavior, "orderFrontRegardless")
+    }
+
     func testHoverShowKeepsExtraBehaviourBits() {
         let w = hoverPanel()
         w.collectionBehavior = HUDPanelWindow.hoverCollectionBehavior.union(.ignoresCycle)

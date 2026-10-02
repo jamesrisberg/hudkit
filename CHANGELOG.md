@@ -18,13 +18,12 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   non-conflicting extra bits.
 
 ### Fixed
-- Hover panels appear on the Space the user is on. On 2026-10-01 Scratch's, Stash's, ffmpegHUD's
-  and magickHUD's hover panels (and Sift's dock label) sat on one desktop while their apps
-  answered `visible: true`: the window server had dropped their all-Spaces membership while
-  AppKit still reported `.canJoinAllSpaces`, and AppKit does not resend an unchanged value.
-  Every order-in of a hover `HUDPanelWindow` now re-asserts the behaviour, and a window still
-  on another Space shortly after is brought over with `.moveToActiveSpace`, without focus or a
-  Space switch. Apps pick this up by rebuilding.
+- Hover panels and dock labels appear on the Space the user is on, every time. The window
+  server can drop a window's all-Spaces membership while AppKit still reports
+  `.canJoinAllSpaces`, which left a panel answering `visible: true` from another desktop; every
+  order-in of a hover `HUDPanelWindow` or a dock label now re-asserts the behaviour, and a
+  hover panel still on another Space shortly after is brought over with `.moveToActiveSpace`,
+  without taking focus or switching Spaces. Apps pick this up by rebuilding.
 - `hud-release.sh` builds through the repo's `build.sh`, so a release carries the helpers it
   names in `HUD_HELPERS` (MacHUD's voice host and MCP server), and stops when one is missing.
 
