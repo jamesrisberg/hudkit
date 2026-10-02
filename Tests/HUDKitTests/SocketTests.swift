@@ -175,6 +175,52 @@ final class SocketTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: server.path))
     }
 
+    func testStopSendsTheFarewellOnceToEverySubscriber() throws {
+        server.farewellEvent = "quitting"
+        let received = Received()
+        let closed = expectation(description: "closed")
+        _ = try HUDSocketClient(path: server.path, timeout: 5).subscribe(onEvent: { received.append("all", $0) }, onClose: { closed.fulfill() })
+        _ = try HUDSocketClient(path: server.path, timeout: 5).subscribe(events: ["badge"], onEvent: { received.append("badge", $0) })
+        let deadline = Date().addingTimeInterval(5)
+        while server.subscriberCount < 2 && Date() < deadline { usleep(10_000) }
+        XCTAssertEqual(server.subscriberCount, 2)
+
+        server.stop()
+        server.stop()
+        wait(for: [closed], timeout: 5)
+        while received.count < 2 && Date() < deadline { usleep(10_000) }
+        let events = received.snapshot
+        XCTAssertEqual(events.map(\.0).sorted(), ["all", "badge"], "a filtered subscriber gets it too, each exactly once")
+        XCTAssertTrue(events.allSatisfy { $0.1["event"] as? String == "quitting" })
+    }
+
+    func testStopSendsNothingWithoutAFarewell() throws {
+        let received = Received()
+        let closed = expectation(description: "closed")
+        _ = try HUDSocketClient(path: server.path, timeout: 5).subscribe(onEvent: { received.append("all", $0) }, onClose: { closed.fulfill() })
+        let deadline = Date().addingTimeInterval(5)
+        while server.subscriberCount < 1 && Date() < deadline { usleep(10_000) }
+        server.stop()
+        wait(for: [closed], timeout: 5)
+        XCTAssertEqual(received.count, 0)
+    }
+
+    func testAppTerminationAfterTheDelegateStoppedTheServerSendsOneFarewell() throws {
+        // The delegate's applicationWillTerminate runs before the server's own observer and
+        // usually calls `stop()`; the subscriber must still hear `quitting`, once.
+        server.farewellEvent = "quitting"
+        let received = Received()
+        let closed = expectation(description: "closed")
+        _ = try HUDSocketClient(path: server.path, timeout: 5).subscribe(onEvent: { received.append("all", $0) }, onClose: { closed.fulfill() })
+        let deadline = Date().addingTimeInterval(5)
+        while server.subscriberCount < 1 && Date() < deadline { usleep(10_000) }
+        server.stop()
+        NotificationCenter.default.post(name: NSApplication.willTerminateNotification, object: nil)
+        wait(for: [closed], timeout: 5)
+        while received.count < 1 && Date() < deadline { usleep(10_000) }
+        XCTAssertEqual(received.snapshot.map { $0.1["event"] as? String }, ["quitting"])
+    }
+
     func testAdditionalPathsShareHandlers() throws {
         let extra = dir.appendingPathComponent("legacy.sock").path
         let multi = HUDSocketServer(path: HUDSocket.path(for: "m", in: dir), additionalPaths: [extra])
