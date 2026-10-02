@@ -207,7 +207,7 @@ public enum HUDPanelHostDefaults {
 
     /// `state.json` plus `onActiveSpace` when known: what `state`, `subscribe` events and
     /// panel replies carry.
-    public static func stateJSON(_ state: HUDPanelState, of host: HUDPanelHost) -> [String: Any] {
+    static func stateJSON(_ state: HUDPanelState, of host: HUDPanelHost) -> [String: Any] {
         var d = state.json
         if let on = onActiveSpace(state.id, of: host) { d["onActiveSpace"] = on }
         return d

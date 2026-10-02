@@ -523,11 +523,14 @@ A hover window appears on the Space the user is on, every time, whichever call o
 (`orderFrontRegardless`, `orderFront`, `makeKeyAndOrderFront`, `HUDAnimation`,
 `activateOnShow`): HUDPanelWindow re-asserts the hover Spaces behaviour on every order-in (the
 window server can drop a window's all-Spaces membership while AppKit still reports
-`.canJoinAllSpaces`, and AppKit does not resend an unchanged value), and 0.15 s later, if the
-window is still visible on another Space, brings it over with `.moveToActiveSpace` and restores
-the behaviour, without switching Spaces, making it key or activating the app. A change found
-then posts `HUDPanelWindow.activeSpaceDidSettleNotification` and the router pushes `state` with
-the settled `onActiveSpace`. Apps get this by showing a `HUDPanelWindow` built against this
+`.canJoinAllSpaces`, and AppKit does not resend an unchanged value), and 0.15 s after the
+latest order-in, if the window is still visible on another Space, brings it over with
+`.moveToActiveSpace` and restores the behaviour, without switching Spaces or activating the app
+(a key panel stays key). A panel on another display's current desktop counts as on screen and
+is left alone. A change found then posts `HUDPanelWindow.activeSpaceDidSettleNotification`
+(after a move, once AppKit reports the new Space) and the router pushes `state` with the
+settled `onActiveSpace`. Dock labels (`HUDDockStripView`) re-assert their every-Space behaviour
+on each show too. Apps get this by showing a `HUDPanelWindow` built against this
 HUDKit; nothing to call. Setting `panelID` on the window (or overriding
 `HUDPanelHost.panelWindow(_:)`) lets an app with several panels or windows report
 `onActiveSpace`. Apps may shorten the
