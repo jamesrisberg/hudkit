@@ -321,8 +321,8 @@ Wormhole keeps its own Sparkle feed.
   helps (`Manifest: order 1 in the MacHUD dock`, `HUDAnimation.slide(in:)/slideOut take a duration`).
   No type prefixes (`feat:`), no trailing period.
 - The body says why, when that is not obvious from the subject.
-- Commits written with an AI agent end with its trailer, e.g.
-  `Co-Authored-By: Claude <model> <noreply@anthropic.com>`.
+- Commits are authored by the user only, with no `Co-Authored-By` trailer, including commits an
+  AI agent wrote.
 - Work on `main`; never push without the owner's say-so.
 
 ## Starting a new app
