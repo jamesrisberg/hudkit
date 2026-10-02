@@ -32,6 +32,11 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 ### Changed
 - A panel `kind` HUDKit does not know is kept as `HUDManifest.Panel.Kind.unknown` and never
   shown, instead of being read as `windowed`. `dockSorted` leaves out widget and unknown kinds.
+- `HUDManifest.Panel.Kind` is no longer a `String` raw-value enum: `init(rawValue:)` cannot
+  fail (an unknown string is `.unknown(_)`), and the new `.widget` and `.unknown` cases break
+  exhaustive `switch`es over it. `kind: .hover`, `== .hover` and `.rawValue` still compile.
+- `HUDPanelHostDefaults.panelWindow(_:of:)` never takes a widget window for a one-panel app's
+  panel.
 
 ### Fixed
 - Hover panels and dock labels appear on the Space the user is on, every time. The window
