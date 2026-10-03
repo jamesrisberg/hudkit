@@ -65,18 +65,9 @@ public final class HUDWidgetHost {
     private var registrations: [String: Registration] = [:]
     private var controllers: [String: WidgetController] = [:]
     private var order: [String] = []
-    private var workspaceObservers: [WorkspaceObservation] = []
 
     public init(manifest: HUDManifest? = HUDManifest.main, bundleURL: URL = Bundle.main.bundleURL) {
         self.manifest = manifest
-        // The window server can drop a window's every-Space membership (see `reassertAllSpaces`);
-        // waking and Space changes are when that shows, so widgets re-assert it then.
-        let center = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.activeSpaceDidChangeNotification] {
-            workspaceObservers.append(WorkspaceObservation(center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.repairSpaces() }
-            }))
-        }
         guard let manifest else { return }
         for panel in manifest.widgetPanels {
             schemas[panel.id] = HUDSettingsSchema.load(widget: panel.id, manifest: manifest, bundleURL: bundleURL)
@@ -307,12 +298,6 @@ public final class HUDWidgetHost {
         order.removeAll { $0 == id }
     }
 
-    /// Re-asserts every widget window's every-Space membership and orders it in. Runs on wake
-    /// and on every Space change; idempotent.
-    func repairSpaces() {
-        for id in order { controllers[id]?.show(presenting: presentsWindows) }
-    }
-
     private func setEditing(_ on: Bool) {
         isEditing = on
         for c in controllers.values { c.apply(c.instance, editing: isEditing, revealed: isRevealed) }
@@ -475,9 +460,10 @@ final class WidgetController {
     }
 
     /// Re-asserts the widget Spaces behaviour (the window server can drop it) and, when
-    /// presenting, orders the window in.
+    /// presenting, orders the window in. While it stays in, `HUDPresenceKeeper` repairs it if
+    /// it goes missing from the user's desktop.
     func show(presenting: Bool) {
-        window.reassertAllSpaces(HUDPanelWindow.widgetCollectionBehavior)
+        window.rejoinAllSpaces()
         if presenting { window.orderFrontRegardless() }
     }
 
@@ -583,15 +569,4 @@ private struct WidgetDragSurface: NSViewRepresentable {
             if window.frame != before { onDragEnd?() }
         }
     }
-}
-
-/// A block observer on NSWorkspace's notification center, removed when released.
-private final class WorkspaceObservation: @unchecked Sendable {
-    private let center: NotificationCenter
-    private let token: NSObjectProtocol
-    init(_ center: NotificationCenter, _ token: NSObjectProtocol) {
-        self.center = center
-        self.token = token
-    }
-    deinit { center.removeObserver(token) }
 }

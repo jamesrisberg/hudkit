@@ -90,6 +90,14 @@ normal window (normal level, activates its app, current Space, Dock tile while s
 `activateOnShow(_:)` brings the window forward for a `panel show` without stealing focus on
 `reason=hover`. `HUDPanelWindow(contentRect:behavior: .widget)` is a desktop widget window
 (desktop layer or floating, every Space, never focused, locked); `HUDWidgetHost` makes them.
+Hover and widget windows stay on the desktop the user is looking at while they are ordered in:
+once a Space change, wake or screen change has settled, HUDKit puts back one the window server
+dropped from it, and leaves healthy ones alone (see
+[CONTRACT.md § Behaviour](docs/CONTRACT.md#behaviour-hover-and-windowed)). Each repair, and a
+window the window server keeps reporting away from its frame, is logged under subsystem
+`xyz.machud.hudkit`, category `presence`, in clear text: keep user content out of window titles
+and identifiers. `HUDEnvironmentMonitor.shared.observeSettled` gives an app the same settled
+signal for its own windows and screens.
 `HUDAnimation.reveal/conceal` use the 0.22 s ease-out / 0.18 s ease-in timings;
 `HUDParking.offScreenFrame(for:edge:peek:)`, `restFrame(for:in:)`, `slideOut`/`slideIn` park a
 window against a screen edge with a visible sliver.

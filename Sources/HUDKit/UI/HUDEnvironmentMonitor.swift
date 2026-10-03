@@ -18,7 +18,8 @@ import AppKit
 /// }
 /// ```
 ///
-/// `HUDFullscreenObserver` runs on this signal.
+/// HUDKit's own presence checks (every `.hover` and `.widget` `HUDPanelWindow` ordered in) and
+/// `HUDFullscreenObserver` run on this signal.
 @MainActor
 public final class HUDEnvironmentMonitor {
     /// The kinds of change seen in a burst.

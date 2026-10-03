@@ -553,6 +553,31 @@ HUDKit; nothing to call. Setting `panelID` on the window (or overriding
 `onActiveSpace`. Apps may shorten the
 hover fades (Scratch and Sift fade a hover show in within 0.08 s and a hover hide out in 0.1 s).
 
+A hover or widget window stays on the desktop the user is looking at for as long as it is
+ordered in, not only when it is shown (the voice orb and the tool dock are ordered in once and
+left there). Once a Space change, a wake, the displays waking or a screen change has settled
+(`HUDEnvironmentMonitor`: 0.35 s after the last notification of a burst, at most 2 s after its
+first), HUDKit checks each such window that is meant to be seen (visible, alpha above 0, on a
+screen) and repairs only one the user cannot see: AppKit says it is not on the active Space or
+the window server does not list it on screen. A hover window has its Spaces behaviour
+re-asserted and, 0.15 s later, if the window server still has it off screen, is brought over;
+a widget is re-asserted and ordered in. A widget on a screen showing a full-screen Space is
+meant to be absent and is left alone. A repair after which the window server still has the
+window off screen (a wake still in progress, or a full-screen Space the check does not
+recognise, such as Split View) is logged once and tried again, unseen and unlogged, on later
+settled signals at most every 30 s; one after which only AppKit calls the window away while the
+window server shows it on screen is logged once and not tried again. A window back on the desktop
+after a failed attempt is logged with the number of attempts; ordering it out and in starts
+afresh. A healthy window is never touched. A window the window server reports away from its frame is only logged, never
+moved: the server reports every all-Spaces window shifted while a Space switch is in flight, so
+it is logged only when it is still shifted by the same amount 0.5 s later and the other HUD
+windows of the app on that screen are not shifted with it. Each repair and report is logged:
+`log show --predicate 'subsystem == "xyz.machud.hudkit"'` (category `presence`) names the window
+(its class, then the first of `panelID`, `identifier`, title and accessibility label, and its
+window number) and what was wrong. The log is public (not redacted), so keep user content out of
+a HUD window's title, identifier and accessibility label. Apps that inspect their own windows or
+screens after such a change do it on the same signal: `HUDEnvironmentMonitor.shared.observeSettled`.
+
 A menu bar app has no main menu, so ⌘C/⌘V/⌘X/⌘A/⌘Z do nothing in its text fields. An app with
 any text input **must** call `HUDEditMenu.install(appName:)` at launch. MacHUD does not do this for
 other apps.
@@ -702,7 +727,7 @@ command.
 |---|---|
 | Look | `HUDGlassView(.panel)`: the family glass, corner radius 20 (`HUDWidgetStyle.cornerRadius`) |
 | Level | `desktop`: `HUDPanelWindow.widgetDesktopLevel`, one above the desktop icons (`CGWindowLevelForKey(.desktopIconWindow) + 1`), under every app window; `float`: `.floating`. While `reveal` or `edit` is on, desktop widgets are raised to `.floating` too |
-| Spaces | every Space, stationary (Mission Control leaves it in place), out of the ⌘` cycle, not on full-screen Spaces (`widgetCollectionBehavior`). The every-Space membership is re-asserted (`reassertAllSpaces`) on every `create`, `update` and `sync`, after the Mac wakes and on every Space change |
+| Spaces | every Space, stationary (Mission Control leaves it in place), out of the ⌘` cycle, not on full-screen Spaces (`widgetCollectionBehavior`). The every-Space membership is re-asserted (`reassertAllSpaces`) on every `create`, `update` and `sync`; in between, HUDKit repairs a widget only when it goes missing from the user's desktop (see [Behaviour](#behaviour-hover-and-windowed)) |
 | Focus | non-activating: a click never activates the app; never key or main, unless the type was registered `keyable` (text input) |
 | Locked | not movable, and never by its background, outside edit mode |
 | Edit mode | content dimmed and not clickable; a drag surface moves the window and reports `frame`; remove (top left), settings (top right, if the type has a per-instance schema) and next size (bottom right, if it has more than one size) controls report events |

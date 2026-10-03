@@ -8,6 +8,9 @@ import os
 /// redact it to `<private>`.
 enum HUDLog {
     static let subsystem = "xyz.machud.hudkit"
+    /// What the presence keeper found wrong with a window it keeps (off the user's desktop,
+    /// displaced) and what it did about it.
+    static let presence = Logger(subsystem: subsystem, category: "presence")
     /// Each change of a screen's full-screen result, with the window that satisfied the test.
     static let fullscreen = Logger(subsystem: subsystem, category: "fullscreen")
 

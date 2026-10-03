@@ -44,11 +44,14 @@ public enum HUDParking {
     /// The screen frame to park against: the screen containing most of `frame`, else the main screen.
     @MainActor
     public static func screenFrame(for frame: CGRect) -> CGRect {
-        let best = NSScreen.screens.max { a, b in
-            area(a.frame.intersection(frame)) < area(b.frame.intersection(frame))
-        }
-        if let best, area(best.frame.intersection(frame)) > 0 { return best.frame }
-        return NSScreen.main?.frame ?? frame
+        screenFrame(for: frame, among: NSScreen.screens.map(\.frame)) ?? NSScreen.main?.frame ?? frame
+    }
+
+    /// The one of `screens` containing most of `frame`; nil when `frame` is on none of them.
+    static func screenFrame(for frame: CGRect, among screens: [CGRect]) -> CGRect? {
+        let best = screens.max { area($0.intersection(frame)) < area($1.intersection(frame)) }
+        guard let best, area(best.intersection(frame)) > 0 else { return nil }
+        return best
     }
 
     /// `offScreenFrame` against the screen `frame` is on.
