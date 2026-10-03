@@ -7,10 +7,22 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Fixed
+- The full-screen check behind the notch orb can no longer get stuck: an invisible screen-sized
+  window no longer counts as a full-screen app, a moment with no frontmost app keeps the last
+  answer instead of counting any app's window, the check runs again once a desktop switch,
+  wake or display change has settled, and while it reports full screen it re-checks every two
+  seconds, so leaving full screen by any route brings the panel back within about two seconds.
+
 ### Added
+- Diagnostics in the unified log (`log show --predicate 'subsystem == "xyz.machud.hudkit"'`):
+  category `fullscreen` records every change of a screen's full-screen result with the window
+  that caused it.
 - `HUDEnvironmentMonitor`: one call once a desktop switch, wake, displays waking or screen
   change has settled (`HUDEnvironmentMonitor.shared.observeSettled { change in }`, with
   `Change` and `Observation`).
+- `HUDFullscreenObserver.evidence(screenID:)` and `evidenceByScreenID`: the window that made a
+  screen count as full screen; `recheckInterval`. `HUDWindowSnapshot.windowID` and `alpha`.
 
 ## [0.3.1] - 2026-10-02
 

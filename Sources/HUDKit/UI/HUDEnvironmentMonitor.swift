@@ -17,6 +17,8 @@ import AppKit
 ///     self?.reconcileWindows()
 /// }
 /// ```
+///
+/// `HUDFullscreenObserver` runs on this signal.
 @MainActor
 public final class HUDEnvironmentMonitor {
     /// The kinds of change seen in a burst.

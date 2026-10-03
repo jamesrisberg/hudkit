@@ -8,6 +8,8 @@ import os
 /// redact it to `<private>`.
 enum HUDLog {
     static let subsystem = "xyz.machud.hudkit"
+    /// Each change of a screen's full-screen result, with the window that satisfied the test.
+    static let fullscreen = Logger(subsystem: subsystem, category: "fullscreen")
 
     /// A rect as `x,y,w,h` in whole points.
     static func format(_ rect: CGRect) -> String {

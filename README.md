@@ -110,13 +110,19 @@ instead. `HUDNotchGeometry(screen:)` reads the live values.
 `HUDFullscreenObserver` publishes, per screen, whether the frontmost app is full screen there
 (`isFullScreen(screenID:)`, `onChange`), so a host can hide or fall back a notch-anchored panel
 while a full-screen app owns that part of the screen. A screen counts as full screen only on
-positive window evidence — a layer-0 window owned by the frontmost app whose bounds equal the
-screen's full frame (`HUDWindowSnapshot`, read from `CGWindowListCopyWindowInfo`, no Screen
-Recording permission needed) — not from `visibleFrame` alone, which an auto-hidden menu bar and
-Dock can also fill with no full-screen app running. It re-evaluates on `NSWorkspace`
-app-activation and active-Space-change notifications; `screensProvider`, `windowsProvider` and
-`frontmostApplicationPID` are the injected sources for tests, defaulting to `NSScreen.screens`,
-the live window list and `NSWorkspace`.
+positive window evidence — a drawn (alpha above 0) layer-0 window owned by the frontmost app
+whose bounds equal the screen's full frame (`HUDWindowSnapshot`, read from
+`CGWindowListCopyWindowInfo`, no Screen Recording permission needed) — not from `visibleFrame`
+alone, which an auto-hidden menu bar and Dock can also fill with no full-screen app running.
+`evidence(screenID:)` is the window that satisfied the test (window number, owner pid, bounds,
+layer, alpha). While the frontmost app is unknown each screen keeps its previous result. Between
+`start()` and `stop()` it re-evaluates on `NSWorkspace` app-activation and active-Space-change
+notifications, once a Space change, wake or screen change has settled (`HUDEnvironmentMonitor`),
+and every `recheckInterval` (2 s) while any screen is reported full screen, so a stale result
+cannot outlive its window by more than that. Each change of a screen's result is logged under
+subsystem `xyz.machud.hudkit`, category `fullscreen`, with the trigger, the frontmost app and the
+evidence. `screensProvider`, `windowsProvider` and `frontmostApplicationPID` are the injected
+sources for tests, defaulting to `NSScreen.screens`, the live window list and `NSWorkspace`.
 
 ## MacHUD contract
 
