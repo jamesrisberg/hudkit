@@ -7,6 +7,11 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Added
+- `HUDEnvironmentMonitor`: one call once a desktop switch, wake, displays waking or screen
+  change has settled (`HUDEnvironmentMonitor.shared.observeSettled { change in }`, with
+  `Change` and `Observation`).
+
 ## [0.3.1] - 2026-10-02
 
 ### Fixed

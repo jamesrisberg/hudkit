@@ -49,6 +49,7 @@ Check HUDKit out next to the apps (`~/dev/hudkit` beside `~/dev/sift`) and depen
 | Chrome | `HUDGlassView`, `HUDGlass` / `.hudGlass()`, `HUDGlossView`, `HUDPanelWindow` |
 | Motion | `HUDSpring`, `HUDAnimation`, `HUDParking`, `HUDEdge` |
 | Notch | `HUDNotchGeometry`, `HUDFullscreenObserver`, `HUDScreenSnapshot`, `HUDWindowSnapshot` |
+| Spaces and screens | `HUDEnvironmentMonitor` |
 | Hotkeys | `HUDHotKey`, `HUDHotKeyCenter` |
 | Menu bar | `HUDStatusIcon`, `HUDMenuBridge`, `HUDStatusItemPolicy`, `HUDMenuHost` |
 
