@@ -22,6 +22,10 @@ import AppKit
 /// A window can switch behaviour at runtime with `applyHUDRecipe(behavior:)` (Sift's one
 /// window is the windowed browser in full mode and the hover dock strip in compact mode).
 /// HUDParking and HUDAnimation only move frames and alpha, so they work for both.
+///
+/// Hover and widget windows stay on every Space for as long as they are ordered in: if the
+/// window server drops one from the desktop the user is looking at, `HUDPresenceKeeper` puts it
+/// back once the Space change, wake or screen change has settled, and logs it.
 open class HUDPanelWindow: NSPanel {
     public enum Behavior: String, Codable, Sendable {
         case hover, windowed, widget
@@ -127,6 +131,7 @@ open class HUDPanelWindow: NSPanel {
         isMovable = true
         if behavior == .widget { setWidgetLocked(true) }
         HUDDockPolicy.shared.update(self)
+        presenceKeeper.update(self)
     }
 
     /// NSPanel reads `.nonactivatingPanel` once, at init: inserting or removing it later
@@ -190,12 +195,14 @@ open class HUDPanelWindow: NSPanel {
         transition.reason != .hover
     }
 
-    // Keep the activation policy in step with visibility, and hover windows on the user's Space.
+    // Keep the activation policy in step with visibility, hover windows on the user's Space,
+    // and every all-Spaces window in the presence keeper's care while it is ordered in.
     open override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         let hoverShow = place != .out && prepareHoverShow()
         super.order(place, relativeTo: otherWin)
         if hoverShow { finishHoverShow() }
         HUDDockPolicy.shared.update(self)
+        presenceKeeper.update(self)
     }
 
     open override func orderFrontRegardless() {
@@ -203,16 +210,28 @@ open class HUDPanelWindow: NSPanel {
         super.orderFrontRegardless()
         if hoverShow { finishHoverShow() }
         HUDDockPolicy.shared.update(self)
+        presenceKeeper.update(self)
     }
 
     open override func close() {
         super.close()
         HUDDockPolicy.shared.update(self)
+        presenceKeeper.update(self)
+    }
+
+    /// The keeper that tracks this window while it is ordered in (`HUDPresenceKeeper`); tests
+    /// substitute their own.
+    var presenceKeeper: HUDPresenceKeeper = .shared {
+        didSet {
+            guard oldValue !== presenceKeeper else { return }
+            oldValue.forget(self)
+            presenceKeeper.update(self)
+        }
     }
 
     // MARK: Hover windows on every Space
 
-    /// Set while `ensureOnActiveSpace` re-orders the window, so the overrides do not recurse.
+    /// Set while `moveToActiveSpace` re-orders the window, so the overrides do not recurse.
     private var movingToActiveSpace = false
     /// Bumped by every order-in; a scheduled Space check runs only if no order-in followed it.
     private var spaceCheckGeneration = 0
@@ -221,10 +240,10 @@ open class HUDPanelWindow: NSPanel {
     /// Test seam: false skips the show's re-assertion so the fallback can be tested alone.
     var reassertsSpacesOnShow = true
 
-    /// Posted (object: the window) when the Space check after a hover show finds the window
-    /// somewhere other than `isOnActiveSpace` said at the show, or had to bring it over (then
-    /// once AppKit has caught up with the move). `HUDControlRouter` publishes `state` on it,
-    /// so `onActiveSpace` settles for subscribers.
+    /// Posted (object: the window) when the Space check after a hover show or a presence
+    /// repair (`HUDPresenceKeeper`) finds the window somewhere other than `isOnActiveSpace` said
+    /// before it, or had to bring it over (then once AppKit has caught up with the move).
+    /// `HUDControlRouter` publishes `state` on it, so `onActiveSpace` settles for subscribers.
     public static let activeSpaceDidSettleNotification = Notification.Name("HUDPanelWindowActiveSpaceDidSettle")
     /// How long after the latest order-in the Space check runs (and, after a move, how long
     /// before the settled value is announced). AppKit learns where the window server put a
@@ -239,8 +258,19 @@ open class HUDPanelWindow: NSPanel {
     private func prepareHoverShow() -> Bool {
         guard behavior == .hover, !movingToActiveSpace else { return false }
         guard reassertsSpacesOnShow else { return true }
-        reassertAllSpaces(Self.hoverBehavior(keeping: collectionBehavior))
+        rejoinAllSpaces()
         return true
+    }
+
+    /// Re-asserts this behaviour's every-Space membership (`reassertAllSpaces`): the hover
+    /// Spaces behaviour keeping the window's other bits, or exactly `widgetCollectionBehavior`.
+    /// A windowed window is left alone.
+    func rejoinAllSpaces() {
+        switch behavior {
+        case .hover: reassertAllSpaces(Self.hoverBehavior(keeping: collectionBehavior))
+        case .widget: reassertAllSpaces(Self.widgetCollectionBehavior)
+        case .windowed: break
+        }
     }
 
     /// Schedules the Space check for once the window server has settled, restarting the wait
@@ -268,10 +298,8 @@ open class HUDPanelWindow: NSPanel {
         }
     }
 
-    /// If a visible hover window is still not on the active Space, brings it over the way a
-    /// windowed show does (`.moveToActiveSpace`, without switching Spaces or activating the
-    /// app), then restores the hover behaviour. A window that was key is key again after.
-    /// Returns whether it had to.
+    /// If a visible hover window is still not on the active Space, brings it over
+    /// (`moveToActiveSpace`). Returns whether it had to.
     ///
     /// `isOnActiveSpace` is true for a window on the current Space of any display (with
     /// "Displays have separate Spaces", a panel on the other display's current desktop counts
@@ -279,11 +307,21 @@ open class HUDPanelWindow: NSPanel {
     @discardableResult
     func ensureOnActiveSpace() -> Bool {
         guard behavior == .hover, isVisible, !isOnActiveSpace, !movingToActiveSpace else { return false }
+        HUDLog.presence.notice("moving \(self.logName, privacy: .public) to the active Space: still elsewhere after a show")
+        moveToActiveSpace()
+        return true
+    }
+
+    /// Brings a visible hover window to the active Space the way a windowed show does
+    /// (`.moveToActiveSpace`, without switching Spaces or activating the app), then restores
+    /// the hover behaviour; a window that was key is key again after. Called only for a window
+    /// that is not on screen (it is on another Space), so ordering it out and back in is unseen.
+    func moveToActiveSpace() {
+        guard behavior == .hover, isVisible, !movingToActiveSpace else { return }
         let hover = Self.hoverBehavior(keeping: collectionBehavior)
         let wasKey = isKeyWindow
         movingToActiveSpace = true
         defer { movingToActiveSpace = false }
-        // Not on screen here (it is on another Space), so ordering out and back in is unseen.
         // Ordering out resigns key; `orderFrontRegardless` neither makes it key nor activates
         // the app, so key status is given back explicitly.
         super.order(.out, relativeTo: 0)
@@ -291,7 +329,13 @@ open class HUDPanelWindow: NSPanel {
         super.orderFrontRegardless()
         reassertAllSpaces(hover)
         if wasKey { makeKey() }
-        return true
+    }
+
+    /// How the presence and full-screen logs name this window: its class, the first of
+    /// `panelID`, `identifier`, `title` and accessibility label that is set, and its number.
+    var logName: String {
+        let name = [panelID, identifier?.rawValue, title, accessibilityLabel()].compactMap { $0 }.first { !$0.isEmpty }
+        return "\(type(of: self))" + (name.map { " \"\($0)\"" } ?? "") + " #\(windowNumber)"
     }
 
     /// Level for a panel anchored under the notch or hanging from the menu bar: `.statusBar`
@@ -320,7 +364,8 @@ extension NSWindow {
     /// hear it. The window server can drop a window's all-Spaces membership while AppKit still
     /// holds `.canJoinAllSpaces`, and AppKit's setter skips an unchanged value, so assigning the
     /// same behaviour would not repair it; taking `.canJoinAllSpaces` out and putting it back
-    /// makes AppKit send it again. Windows meant to be on every Space call this on every order-in.
+    /// makes AppKit send it again. Windows meant to be on every Space call this on every order-in,
+    /// and `HUDPresenceKeeper` calls it for one it finds off the user's desktop.
     func reassertAllSpaces(_ behavior: NSWindow.CollectionBehavior) {
         collectionBehavior = behavior.subtracting(.canJoinAllSpaces)
         collectionBehavior = behavior

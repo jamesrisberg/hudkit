@@ -49,6 +49,7 @@ Check HUDKit out next to the apps (`~/dev/hudkit` beside `~/dev/sift`) and depen
 | Chrome | `HUDGlassView`, `HUDGlass` / `.hudGlass()`, `HUDGlossView`, `HUDPanelWindow` |
 | Motion | `HUDSpring`, `HUDAnimation`, `HUDParking`, `HUDEdge` |
 | Notch | `HUDNotchGeometry`, `HUDFullscreenObserver`, `HUDScreenSnapshot`, `HUDWindowSnapshot` |
+| Spaces and screens | `HUDEnvironmentMonitor` |
 | Hotkeys | `HUDHotKey`, `HUDHotKeyCenter` |
 | Menu bar | `HUDStatusIcon`, `HUDMenuBridge`, `HUDStatusItemPolicy`, `HUDMenuHost` |
 
@@ -89,6 +90,14 @@ normal window (normal level, activates its app, current Space, Dock tile while s
 `activateOnShow(_:)` brings the window forward for a `panel show` without stealing focus on
 `reason=hover`. `HUDPanelWindow(contentRect:behavior: .widget)` is a desktop widget window
 (desktop layer or floating, every Space, never focused, locked); `HUDWidgetHost` makes them.
+Hover and widget windows stay on the desktop the user is looking at while they are ordered in:
+once a Space change, wake or screen change has settled, HUDKit puts back one the window server
+dropped from it, and leaves healthy ones alone (see
+[CONTRACT.md § Behaviour](docs/CONTRACT.md#behaviour-hover-and-windowed)). Each repair, and a
+window the window server keeps reporting away from its frame, is logged under subsystem
+`xyz.machud.hudkit`, category `presence`, in clear text: keep user content out of window titles
+and identifiers. `HUDEnvironmentMonitor.shared.observeSettled` gives an app the same settled
+signal for its own windows and screens.
 `HUDAnimation.reveal/conceal` use the 0.22 s ease-out / 0.18 s ease-in timings;
 `HUDParking.offScreenFrame(for:edge:peek:)`, `restFrame(for:in:)`, `slideOut`/`slideIn` park a
 window against a screen edge with a visible sliver.
@@ -109,13 +118,19 @@ instead. `HUDNotchGeometry(screen:)` reads the live values.
 `HUDFullscreenObserver` publishes, per screen, whether the frontmost app is full screen there
 (`isFullScreen(screenID:)`, `onChange`), so a host can hide or fall back a notch-anchored panel
 while a full-screen app owns that part of the screen. A screen counts as full screen only on
-positive window evidence — a layer-0 window owned by the frontmost app whose bounds equal the
-screen's full frame (`HUDWindowSnapshot`, read from `CGWindowListCopyWindowInfo`, no Screen
-Recording permission needed) — not from `visibleFrame` alone, which an auto-hidden menu bar and
-Dock can also fill with no full-screen app running. It re-evaluates on `NSWorkspace`
-app-activation and active-Space-change notifications; `screensProvider`, `windowsProvider` and
-`frontmostApplicationPID` are the injected sources for tests, defaulting to `NSScreen.screens`,
-the live window list and `NSWorkspace`.
+positive window evidence — a drawn (alpha above 0) layer-0 window owned by the frontmost app
+whose bounds equal the screen's full frame (`HUDWindowSnapshot`, read from
+`CGWindowListCopyWindowInfo`, no Screen Recording permission needed) — not from `visibleFrame`
+alone, which an auto-hidden menu bar and Dock can also fill with no full-screen app running.
+`evidence(screenID:)` is the window that satisfied the test (window number, owner pid, bounds,
+layer, alpha). While the frontmost app is unknown each screen keeps its previous result. Between
+`start()` and `stop()` it re-evaluates on `NSWorkspace` app-activation and active-Space-change
+notifications, once a Space change, wake or screen change has settled (`HUDEnvironmentMonitor`),
+and every `recheckInterval` (2 s) while any screen is reported full screen, so a stale result
+cannot outlive its window by more than that. Each change of a screen's result is logged under
+subsystem `xyz.machud.hudkit`, category `fullscreen`, with the trigger, the frontmost app and the
+evidence. `screensProvider`, `windowsProvider` and `frontmostApplicationPID` are the injected
+sources for tests, defaulting to `NSScreen.screens`, the live window list and `NSWorkspace`.
 
 ## MacHUD contract
 

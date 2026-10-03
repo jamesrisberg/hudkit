@@ -480,9 +480,29 @@ final class WidgetHostTests: XCTestCase {
         w.collectionBehavior = []
         call(["action": "sync", "instances": #"[{"instance": "a", "type": "clock"}]"#])
         XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior, "sync repairs")
-        w.collectionBehavior = []
-        host.repairSpaces()
-        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior, "wake / Space change repairs")
+    }
+
+    /// A Space change or wake does not touch a healthy widget on screen: neither the host nor,
+    /// once the change has settled, the presence keeper re-asserts its Spaces behaviour or
+    /// re-orders it mid-transition. The keeper repairs only a widget the user cannot see
+    /// (HUDPresenceKeeperTests).
+    func testSpaceChangesAndWakeLeaveAHealthyWidgetAlone() throws {
+        host.presentsWindows = true
+        let frame = liveTestFrame(width: 170, height: 170)
+        create("a", frame: "\(Int(frame.minX)),\(Int(frame.minY)),170,170")
+        let w = try XCTUnwrap(host.window(for: "a"))
+        w.alphaValue = 0.02
+        addTeardownBlock { @MainActor in w.orderOut(nil) }
+        XCTAssertTrue(HUDPresenceKeeper.shared.isTracking(w), "in the keeper's care")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))   // the window server hears of it
+        // A marker: any re-assertion would replace it. The window stays on this desktop.
+        w.collectionBehavior = HUDPanelWindow.widgetCollectionBehavior.subtracting(.canJoinAllSpaces)
+        let center = NSWorkspace.shared.notificationCenter
+        center.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared)
+        center.post(name: NSWorkspace.didWakeNotification, object: NSWorkspace.shared)
+        RunLoop.main.run(until: Date().addingTimeInterval(HUDEnvironmentMonitor.defaultSettleDelay + 0.3))
+        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior.subtracting(.canJoinAllSpaces),
+                       "not re-asserted on a Space change or wake, nor after it settled")
     }
 
     func testDefaultFrameIsOnThePrimaryDisplay() throws {

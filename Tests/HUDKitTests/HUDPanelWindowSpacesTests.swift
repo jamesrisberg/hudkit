@@ -2,8 +2,9 @@ import XCTest
 import AppKit
 @testable import HUDKit
 
-/// The window server's view of Spaces, through SkyLight's private calls, for tests only:
-/// HUDKit itself uses public AppKit. Nil where the symbols are missing.
+/// The window server's view of Spaces, and ways to put a window where the presence handling
+/// must repair it, through SkyLight's private calls, for tests only: HUDKit itself uses public
+/// API. Nil where the symbols are missing.
 @MainActor
 private enum WindowServerSpaces {
     private typealias ConnectionFn = @convention(c) () -> Int32
@@ -11,6 +12,7 @@ private enum WindowServerSpaces {
     private typealias SpacesFn = @convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>?
     private typealias TagsFn = @convention(c) (Int32, UInt32, UnsafeMutablePointer<UInt32>, Int32) -> Int32
     private typealias MoveFn = @convention(c) (Int32, CFArray, UInt64) -> Void
+    private typealias MoveWindowFn = @convention(c) (Int32, UInt32, UnsafePointer<CGPoint>) -> Int32
 
     private static let handle = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_NOW)
     private static func sym<T>(_ name: String, _: T.Type) -> T? {
@@ -22,9 +24,20 @@ private enum WindowServerSpaces {
     private static let spacesFor = sym("SLSCopySpacesForWindows", SpacesFn.self)
     private static let clearTags = sym("SLSClearWindowTags", TagsFn.self)
     private static let move = sym("SLSMoveWindowsToManagedSpace", MoveFn.self)
+    private static let moveWindow = sym("SLSMoveWindow", MoveWindowFn.self)
 
     static var isAvailable: Bool {
         connection != nil && current != nil && spacesFor != nil && clearTags != nil && move != nil
+    }
+
+    /// Moves `window` in the window server only, `dx` points right of where it is, so the
+    /// server's bounds and AppKit's frame disagree. Returns false where the call is missing.
+    static func displace(_ window: NSWindow, dx: CGFloat) -> Bool {
+        guard let connection, let moveWindow,
+              let server = HUDPresenceKeeper.Probe.serverWindow(number: window.windowNumber) else { return false }
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        var origin = CGPoint(x: server.bounds.minX + dx, y: primaryHeight - server.bounds.maxY)  // top-left origin
+        return moveWindow(connection, UInt32(window.windowNumber), &origin) == 0
     }
 
     /// The desktop the display showing `window` is on now (with two displays, the
@@ -55,6 +68,18 @@ private enum WindowServerSpaces {
         _ = clearTags(connection, UInt32(window.windowNumber), &tags, 64)
         move(connection, [window.windowNumber] as CFArray, space)
     }
+
+    /// `strand` for a window that is ordered in and stays in: the window server keeps a visible
+    /// window on the current Space unless the cleared tag has landed before the move, so the
+    /// run loop turns in between. This is the state a window is left in when the server drops
+    /// its all-Spaces membership and the user then switches desktops.
+    static func strandVisible(_ window: NSWindow, on space: UInt64) {
+        guard let connection, let clearTags, let move else { return }
+        var tags: [UInt32] = [1 << 11, 0]  // kCGSStickyTagBit
+        _ = clearTags(connection, UInt32(window.windowNumber), &tags, 64)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        move(connection, [window.windowNumber] as CFArray, space)
+    }
 }
 
 @MainActor
@@ -67,7 +92,7 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
     }
 
     private func hoverPanel(keyable: Bool = false) -> HUDPanelWindow {
-        let w = HUDPanelWindow(contentRect: CGRect(x: 4, y: 4, width: 10, height: 10), keyable: keyable)
+        let w = HUDPanelWindow(contentRect: liveTestFrame(), keyable: keyable)
         w.alphaValue = 0.02
         windows.append(w)
         return w
@@ -233,7 +258,10 @@ extension HUDPanelWindowSpacesTests {
         let host = SpacesHost(window: w)
         var published: Bool?
         let settled = expectation(forNotification: HUDPanelWindow.activeSpaceDidSettleNotification, object: w) { _ in
-            published = HUDPanelHostDefaults.stateJSON(HUDPanelState(id: "main", visible: true), of: host)["onActiveSpace"] as? Bool
+            // Posted on the main thread.
+            MainActor.assumeIsolated {
+                published = HUDPanelHostDefaults.stateJSON(HUDPanelState(id: "main", visible: true), of: host)["onActiveSpace"] as? Bool
+            }
             return true
         }
         w.makeKeyAndOrderFront(nil)
@@ -265,6 +293,142 @@ extension HUDPanelWindowSpacesTests {
         settle()
         XCTAssertEqual(WindowServerSpaces.spaces(of: label), all)
         XCTAssertTrue(label.isOnActiveSpace)
+    }
+
+    // MARK: - The presence keeper against the real window server
+
+    private func recordingPanel(_ behavior: HUDPanelWindow.Behavior) -> RecordingPanel {
+        let w = RecordingPanel(contentRect: liveTestFrame(), behavior: behavior)
+        w.alphaValue = 0.02
+        windows.append(w)
+        return w
+    }
+
+    /// A keeper reading the real window server, on its own settled signal (never fired here:
+    /// tests call `check`), with real time for its delayed checks.
+    private func liveKeeper() -> (keeper: HUDPresenceKeeper, findings: () -> [HUDPresenceKeeper.Finding]) {
+        let monitor = HUDEnvironmentMonitor(scheduler: .main, workspaceCenter: nil, appCenter: nil)
+        let keeper = HUDPresenceKeeper(environment: monitor, scheduler: .main, probe: .live)
+        var findings: [HUDPresenceKeeper.Finding] = []
+        keeper.onFinding = { findings.append($0) }
+        return (keeper, { findings })
+    }
+
+    /// The live probe reads a window's on-screen flag and its bounds, in AppKit coordinates,
+    /// once the window server has heard of the order-in (AppKit sends it when the run loop turns).
+    func testLiveProbeReadsTheWindowServer() throws {
+        let w = hoverPanel()
+        w.orderFrontRegardless()
+        settle()
+        let shown = try XCTUnwrap(HUDPresenceKeeper.Probe.live.serverWindow(w))
+        XCTAssertTrue(shown.isOnScreen)
+        XCTAssertEqual(shown.bounds, w.frame)
+        w.orderOut(nil)
+        settle()
+        XCTAssertNotEqual(HUDPresenceKeeper.Probe.live.serverWindow(w)?.isOnScreen, true, "ordered out: not on screen")
+    }
+
+    /// Strands an ordered-in window of `behavior` on another desktop, posts what a desktop
+    /// switch posts (in this process only) and waits out the settle delay and a hover repair's
+    /// follow-up: the shared keeper, end to end. Returns the window, the Spaces it was on when
+    /// healthy, and what the shared keeper found about it.
+    private func strandShownWindowAndSwitchDesktops(_ behavior: HUDPanelWindow.Behavior) throws
+        -> (window: RecordingPanel, healthy: Set<UInt64>, findings: [HUDPresenceKeeper.Finding]) {
+        let (_, other) = try spacesForStranding()
+        let w = recordingPanel(behavior)
+        w.orderFrontRegardless()
+        settle()
+        let healthy = WindowServerSpaces.spaces(of: w)
+        WindowServerSpaces.strandVisible(w, on: other)
+        settle()
+        XCTAssertEqual(WindowServerSpaces.spaces(of: w), [other], "\(behavior): precondition: on another desktop only")
+        XCTAssertTrue(w.isVisible, "\(behavior): precondition: still ordered in")
+        XCTAssertFalse(w.isOnActiveSpace, "\(behavior): precondition: AppKit knows")
+        w.resetRecords()
+        var findings: [HUDPresenceKeeper.Finding] = []
+        HUDPresenceKeeper.shared.onFinding = { if $0.windowNumber == w.windowNumber { findings.append($0) } }
+        defer { HUDPresenceKeeper.shared.onFinding = nil }
+        NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification, object: NSWorkspace.shared)
+        RunLoop.main.run(until: Date().addingTimeInterval(HUDEnvironmentMonitor.defaultSettleDelay
+                                                              + HUDPanelWindow.spaceCheckDelay + 0.3))
+        return (w, healthy, findings)
+    }
+
+    /// A hover panel that stays ordered in while the window server drops its all-Spaces
+    /// membership and the user moves to another desktop (the voice orb's case: ordered in once
+    /// at launch and never again) is back on the user's desktop and on every desktop after the
+    /// next settled signal, without the app showing it again. The re-assertion alone brings it
+    /// back: nothing has to move it.
+    func testSettledSignalBringsBackAShownStrandedHoverPanel() throws {
+        let (w, healthy, findings) = try strandShownWindowAndSwitchDesktops(.hover)
+        XCTAssertEqual(findings.map(\.kind), [.offDesktop], "repaired, and the repair worked")
+        XCTAssertEqual(findings.first?.server?.isOnScreen, false, "the window server agreed it was not on screen")
+        XCTAssertEqual(WindowServerSpaces.spaces(of: w), healthy, "back on every desktop")
+        XCTAssertTrue(w.isOnActiveSpace)
+        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.hoverCollectionBehavior)
+        XCTAssertEqual(w.moves, 0, "the re-assertion alone was enough")
+        XCTAssertEqual(w.orderIns, 0)
+    }
+
+    /// The same for a widget, which joins every desktop but full-screen ones.
+    func testSettledSignalBringsBackAShownStrandedWidget() throws {
+        let (w, healthy, findings) = try strandShownWindowAndSwitchDesktops(.widget)
+        XCTAssertEqual(findings.map(\.kind), [.offDesktop], "repaired, and the repair worked")
+        XCTAssertEqual(WindowServerSpaces.spaces(of: w), healthy, "back on every desktop it was on")
+        XCTAssertTrue(w.isOnActiveSpace)
+        XCTAssertEqual(w.collectionBehavior, HUDPanelWindow.widgetCollectionBehavior)
+        XCTAssertEqual(w.moves, 0)
+    }
+
+    /// Healthy windows, as the real window server reports them, are not touched: no Spaces
+    /// toggle, no re-order, no frame set, nothing scheduled that later touches them.
+    func testPresenceCheckLeavesHealthyWindowsAlone() {
+        let (keeper, findings) = liveKeeper()
+        let hover = recordingPanel(.hover)
+        let widget = recordingPanel(.widget)
+        for w in [hover, widget] {
+            w.presenceKeeper = keeper
+            w.orderFrontRegardless()
+        }
+        settle()
+        hover.resetRecords()
+        widget.resetRecords()
+        XCTAssertEqual(keeper.check(.activeSpace), [])
+        RunLoop.main.run(until: Date().addingTimeInterval(HUDPresenceKeeper.defaultDisplacementRecheckDelay + 0.2))
+        XCTAssertEqual(findings(), [])
+        XCTAssertTrue(hover.untouched)
+        XCTAssertTrue(widget.untouched)
+    }
+
+    /// A window the window server holds away from its AppKit frame (moved there through a
+    /// private call, as no public API can) is reported once the second look confirms it, and
+    /// left alone: the keeper does not move it (a frame set would reach the app's delegate as
+    /// the user moving the window). Skips where the call is missing or does not move it.
+    func testPresenceCheckReportsADisplacedWindowAndLeavesItAlone() throws {
+        let (keeper, findings) = liveKeeper()
+        for behavior in [HUDPanelWindow.Behavior.hover, .widget] {
+            let w = recordingPanel(behavior)
+            let frame = w.frame
+            w.presenceKeeper = keeper
+            w.orderFrontRegardless()
+            settle()
+            try XCTSkipUnless(WindowServerSpaces.displace(w, dx: 300), "SLSMoveWindow unavailable")
+            settle()
+            let displaced = HUDPresenceKeeper.Probe.live.serverWindow(w)?.bounds
+            try XCTSkipUnless(displaced == frame.offsetBy(dx: 300, dy: 0),
+                              "SLSMoveWindow did not move the window here (\(String(describing: displaced)))")
+            XCTAssertEqual(w.frame, frame, "\(behavior): AppKit's frame unchanged (precondition)")
+            w.resetRecords()
+            XCTAssertEqual(keeper.check(.activeSpace), [], "\(behavior): not on the first reading")
+            RunLoop.main.run(until: Date().addingTimeInterval(HUDPresenceKeeper.defaultDisplacementRecheckDelay + 0.2))
+            XCTAssertEqual(findings().last?.kind, .displaced, "\(behavior)")
+            XCTAssertEqual(findings().last?.windowNumber, w.windowNumber)
+            XCTAssertEqual(HUDPresenceKeeper.Probe.live.serverWindow(w)?.bounds, frame.offsetBy(dx: 300, dy: 0),
+                           "\(behavior): not moved")
+            XCTAssertTrue(w.untouched, "\(behavior): no frame set, no delegate callback, no re-order")
+            w.orderOut(nil)
+        }
+        XCTAssertEqual(findings().count, 2)
     }
 
     /// A hover panel on a second display's current desktop counts as on the active Space

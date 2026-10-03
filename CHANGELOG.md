@@ -7,6 +7,33 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Fixed
+- HUD windows that stay on screen for a long time (the voice orb, the tool dock, parking orbs,
+  widgets) no longer go missing from a desktop. After a desktop switch, sleep and wake, or a
+  display change, HUDKit checks each one and puts back any the system dropped from the desktop
+  you are looking at, within about a second. Windows that are fine are left alone. A window that
+  does not come back at once (a wake still in progress, a widget on a Split View desktop) is
+  tried again at most every 30 seconds while it stays hidden, and the log says when it is back.
+- Switching desktops or waking the Mac no longer resets every widget's window in the middle of
+  the transition; only a widget that actually went missing is put back.
+- The full-screen check behind the notch orb can no longer get stuck: an invisible screen-sized
+  window no longer counts as a full-screen app, a moment with no frontmost app keeps the last
+  answer instead of counting any app's window, the check runs again once a desktop switch,
+  wake or display change has settled, and while it reports full screen it re-checks every two
+  seconds, so leaving full screen by any route brings the panel back within about two seconds.
+
+### Added
+- Diagnostics in the unified log (`log show --predicate 'subsystem == "xyz.machud.hudkit"'`):
+  category `presence` names every HUD window HUDKit had to put back and what was wrong with it,
+  and a window the system keeps reporting somewhere other than where it belongs (logged only,
+  not moved); category `fullscreen` records every change of a screen's full-screen result with
+  the window that caused it. Window titles and identifiers appear in these lines.
+- `HUDEnvironmentMonitor`: one call once a desktop switch, wake, displays waking or screen
+  change has settled (`HUDEnvironmentMonitor.shared.observeSettled { change in }`, with
+  `Change` and `Observation`).
+- `HUDFullscreenObserver.evidence(screenID:)` and `evidenceByScreenID`: the window that made a
+  screen count as full screen; `recheckInterval`. `HUDWindowSnapshot.windowID` and `alpha`.
+
 ## [0.3.1] - 2026-10-02
 
 ### Fixed
