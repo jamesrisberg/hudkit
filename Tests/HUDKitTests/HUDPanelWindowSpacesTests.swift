@@ -258,7 +258,10 @@ extension HUDPanelWindowSpacesTests {
         let host = SpacesHost(window: w)
         var published: Bool?
         let settled = expectation(forNotification: HUDPanelWindow.activeSpaceDidSettleNotification, object: w) { _ in
-            published = HUDPanelHostDefaults.stateJSON(HUDPanelState(id: "main", visible: true), of: host)["onActiveSpace"] as? Bool
+            // Posted on the main thread.
+            MainActor.assumeIsolated {
+                published = HUDPanelHostDefaults.stateJSON(HUDPanelState(id: "main", visible: true), of: host)["onActiveSpace"] as? Bool
+            }
             return true
         }
         w.makeKeyAndOrderFront(nil)
