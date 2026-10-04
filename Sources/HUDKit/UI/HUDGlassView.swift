@@ -3,14 +3,19 @@ import SwiftUI
 
 /// Frosted "jelly glass" container: the MacHUD visual language.
 ///
-/// Add content with `addSubview`; it sits above the backdrop and gloss. On macOS 26 the
-/// backdrop is an `NSGlassEffectView` (Liquid Glass); earlier systems, and any view with a
-/// `maskImage`, use an `NSVisualEffectView` with the `.hudWindow` material.
+/// Add content with `addSubview`; it sits above the backdrop and gloss. The backdrop is the
+/// window server's blur of what is behind the window (`HUDWindowBlur`, set on the window while
+/// the view is in it) under a tint the view draws in its shape: black at 20 % in a dark
+/// appearance, white at 20 % in a light one. The shape is the style's rounded rect, or the
+/// opaque part of `maskImage` when one is set. Where the window server's call is missing, or
+/// the style asks for `.visualEffect`, the backdrop is an `NSVisualEffectView` (`.hudWindow`)
+/// cut to the same shape.
 open class HUDGlassView: NSView {
     public enum Material: Sendable {
-        /// Liquid Glass where available, otherwise `.visualEffect`.
-        case automatic
-        /// Always `NSVisualEffectView(.hudWindow)`.
+        /// The window server's blur of what is behind the window, under a tint
+        /// (`HUDWindowBlur`); `.visualEffect` where that call is missing.
+        case windowBlur
+        /// Always `NSVisualEffectView(.hudWindow)`, with no tint.
         case visualEffect
     }
 
@@ -23,7 +28,7 @@ open class HUDGlassView: NSView {
         public var material: Material
 
         public init(cornerRadius: CGFloat = 20, borderWidth: CGFloat = 1, borderAlpha: CGFloat = 0.28,
-                    gloss: Bool = true, material: Material = .automatic) {
+                    gloss: Bool = true, material: Material = .windowBlur) {
             self.cornerRadius = cornerRadius
             self.borderWidth = borderWidth
             self.borderAlpha = borderAlpha
@@ -41,22 +46,31 @@ open class HUDGlassView: NSView {
 
     public var style: Style { didSet { if style != oldValue { rebuild() } } }
 
-    /// Shape mask (e.g. a ring). Forces the visual-effect backdrop, which supports masking.
+    /// Shape mask (e.g. a ring): the backdrop, tint and blur alike, is only where this image
+    /// is opaque, stretched over the bounds.
     public var maskImage: NSImage? {
-        didSet {
-            if (maskImage == nil) != (oldValue == nil) { rebuild() }
-            (backdrop as? NSVisualEffectView)?.maskImage = maskImage
-        }
+        didSet { if maskImage !== oldValue { backdrop?.shape = backdropShape } }
     }
 
-    /// True when the backdrop is Liquid Glass.
-    public var usesLiquidGlass: Bool { !(backdrop is NSVisualEffectView) }
+    /// The backdrop in use (tests).
+    var backdropMaterial: Material { backdrop?.material ?? style.material }
 
-    private var backdrop: NSView?
+    private var backdrop: HUDBackdropView?
     private var glossView: HUDGlossView?
+    private let windowBlur: HUDWindowBlur
 
     public init(frame: NSRect = .zero, style: Style = .panel) {
         self.style = style
+        windowBlur = .shared
+        super.init(frame: frame)
+        wantsLayer = true
+        rebuild()
+    }
+
+    /// `windowBlur` stands in for the window server's blur (tests).
+    init(frame: NSRect, style: Style, windowBlur: HUDWindowBlur) {
+        self.style = style
+        self.windowBlur = windowBlur
         super.init(frame: frame)
         wantsLayer = true
         rebuild()
@@ -64,6 +78,7 @@ open class HUDGlassView: NSView {
 
     public required init?(coder: NSCoder) {
         style = .panel
+        windowBlur = .shared
         super.init(coder: coder)
         wantsLayer = true
         rebuild()
@@ -79,9 +94,7 @@ open class HUDGlassView: NSView {
         layer?.borderWidth = style.borderWidth
         layer?.borderColor = NSColor.white.withAlphaComponent(style.borderAlpha).cgColor
 
-        let back = Self.makeBackdrop(style: style, masked: maskImage != nil)
-        (back as? NSVisualEffectView)?.maskImage = maskImage
-        back.frame = bounds
+        let back = HUDBackdropView(frame: bounds, material: style.material, shape: backdropShape, windowBlur: windowBlur)
         back.autoresizingMask = [.width, .height]
         addSubview(back, positioned: .below, relativeTo: nil)
         backdrop = back
@@ -96,33 +109,10 @@ open class HUDGlassView: NSView {
         }
     }
 
-    private static func makeBackdrop(style: Style, masked: Bool) -> NSView {
-        #if compiler(>=6.2)
-        if style.material == .automatic, !masked, #available(macOS 26, *) {
-            let glass = PassthroughGlassEffectView()
-            glass.cornerRadius = style.cornerRadius
-            return glass
-        }
-        #endif
-        let effect = PassthroughVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        return effect
+    private var backdropShape: HUDBackdropView.Shape {
+        maskImage.map { .mask($0) } ?? .rounded(style.cornerRadius)
     }
 }
-
-/// Backdrops never take mouse events, so clicks reach the container (drag handles) or content.
-private final class PassthroughVisualEffectView: NSVisualEffectView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-#if compiler(>=6.2)
-@available(macOS 26, *)
-private final class PassthroughGlassEffectView: NSGlassEffectView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-#endif
 
 /// Non-interactive gradient overlay that gives glass its "jelly" sheen.
 public final class HUDGlossView: NSView {

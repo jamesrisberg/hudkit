@@ -725,7 +725,7 @@ command.
 
 | | Widget window (`HUDPanelWindow.Behavior.widget`) |
 |---|---|
-| Look | `HUDGlassView(.panel)`: the family glass, corner radius 20 (`HUDWidgetStyle.cornerRadius`) |
+| Look | `HUDGlassView(.panel)`: the family backdrop (the window server's blur under a tint, border and sheen), corner radius 20 (`HUDWidgetStyle.cornerRadius`) |
 | Level | `desktop`: `HUDPanelWindow.widgetDesktopLevel`, one above the desktop icons (`CGWindowLevelForKey(.desktopIconWindow) + 1`), under every app window; `float`: `.floating`. While `reveal` or `edit` is on, desktop widgets are raised to `.floating` too |
 | Spaces | every Space, stationary (Mission Control leaves it in place), out of the ⌘` cycle, not on full-screen Spaces (`widgetCollectionBehavior`). The every-Space membership is re-asserted (`reassertAllSpaces`) on every `create`, `update` and `sync`; in between, HUDKit repairs a widget only when it goes missing from the user's desktop (see [Behaviour](#behaviour-hover-and-windowed)) |
 | Focus | non-activating: a click never activates the app; never key or main, unless the type was registered `keyable` (text input) |

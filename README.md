@@ -78,10 +78,20 @@ Ship `Contents/Resources/machud.json` describing the panels:
 
 ### Chrome
 
-`HUDGlassView` uses `NSGlassEffectView` (Liquid Glass) on macOS 26 and an `NSVisualEffectView`
-(`.hudWindow`) elsewhere, or whenever a `maskImage` is set. Styles: `.panel`, `.strip`, `.plain`,
-or your own `Style(cornerRadius:borderWidth:borderAlpha:gloss:material:)`. Add content with
-`addSubview`. In SwiftUI: `content.hudGlass(.strip)`.
+`HUDGlassView` is the family's backdrop: the window server's background blur (radius 25) under a
+tint the view draws in its shape (black at 20 % in a dark appearance, white at 20 % in a light
+one), with the style's border and sheen over it. Its shape is the style's rounded rect, or the
+opaque part of `maskImage` when one is set (a ring). The blur is a property of the window: while
+a `HUDGlassView` is in a window, HUDKit sets the window's background blur with
+`CGSSetWindowBackgroundBlurRadius`, a private call resolved at run time with `dlsym` and never
+linked, and the window server blurs what is behind the window wherever the window draws. So the
+window must not be opaque (`HUDPanelWindow` is clear), and anything else translucent the window
+draws is blurred behind too: a panel inside a screen-sized dimming overlay should use
+`material: .visualEffect`. Where the call is missing, while the user has Reduce transparency
+on, or with `material: .visualEffect`, the backdrop is an `NSVisualEffectView` (`.hudWindow`)
+cut to the same shape, with no tint. Styles: `.panel`,
+`.strip`, `.plain`, or your own `Style(cornerRadius:borderWidth:borderAlpha:gloss:material:)`.
+Add content with `addSubview`. In SwiftUI: `content.hudGlass(.strip)`.
 
 `HUDPanelWindow(contentRect:keyable:level:)` is the borderless, non-activating, floating,
 all-Spaces hover panel; `HUDPanelWindow(contentRect:behavior: .windowed)` is the same glass as a

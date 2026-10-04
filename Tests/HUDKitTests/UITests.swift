@@ -4,8 +4,9 @@ import AppKit
 
 @MainActor
 final class UIComponentTests: XCTestCase {
-    func testGlassViewStylesAndLayering() {
-        let glass = HUDGlassView(frame: CGRect(x: 0, y: 0, width: 200, height: 100), style: .strip)
+    func testGlassViewStylesAndLayering() throws {
+        let blur = HUDWindowBlur(setter: { _, _ in }, scheduler: .main, transparency: .fixed(reduced: false))
+        let glass = HUDGlassView(frame: CGRect(x: 0, y: 0, width: 200, height: 100), style: .strip, windowBlur: blur)
         XCTAssertEqual(glass.layer?.cornerRadius, 22)
         XCTAssertEqual(glass.layer?.borderWidth, 0.5)
         XCTAssertEqual(glass.subviews.count, 2, "backdrop + gloss")
@@ -16,14 +17,67 @@ final class UIComponentTests: XCTestCase {
         content.removeFromSuperview()
         XCTAssertTrue(glass.hitTest(CGPoint(x: 10, y: 10)) === glass, "backdrop and gloss are click-through")
 
-        if #available(macOS 26, *) { XCTAssertTrue(glass.usesLiquidGlass) } else { XCTAssertFalse(glass.usesLiquidGlass) }
-        glass.maskImage = NSImage(size: CGSize(width: 10, height: 10))
-        XCTAssertFalse(glass.usesLiquidGlass, "masked glass falls back to NSVisualEffectView")
+        // The window server's blur under a tint in the style's rounded rect.
+        XCTAssertEqual(HUDGlassView.Style().material, .windowBlur, "the default")
+        XCTAssertEqual(glass.backdropMaterial, .windowBlur)
+        let backdrop = try XCTUnwrap(glass.subviews.first as? HUDBackdropView)
+        XCTAssertEqual(backdrop.shape, .rounded(22))
+        XCTAssertEqual(backdrop.frame, glass.bounds)
+        // A mask image shapes the tint, and the blur with it (the server blurs where the window draws).
+        let mask = NSImage(size: CGSize(width: 10, height: 10))
+        glass.maskImage = mask
+        XCTAssertEqual(glass.backdropMaterial, .windowBlur, "a mask keeps the window's blur")
+        XCTAssertEqual((glass.subviews.first as? HUDBackdropView)?.shape, .mask(mask))
+        glass.maskImage = nil
+        XCTAssertEqual((glass.subviews.first as? HUDBackdropView)?.shape, .rounded(22))
         glass.style = .plain
         XCTAssertEqual(glass.subviews.count, 1, "no gloss")
         XCTAssertEqual(glass.layer?.cornerRadius, 0)
-        let fallback = HUDGlassView(style: HUDGlassView.Style(material: .visualEffect))
-        XCTAssertFalse(fallback.usesLiquidGlass)
+        XCTAssertEqual((glass.subviews.first as? HUDBackdropView)?.shape, .rounded(0))
+        let classic = HUDGlassView(frame: .zero, style: HUDGlassView.Style(material: .visualEffect), windowBlur: blur)
+        XCTAssertEqual(classic.backdropMaterial, .visualEffect)
+        XCTAssertNotNil((classic.subviews.first as? HUDBackdropView)?.effectView)
+    }
+
+    func testGlassViewFallsBackToTheClassicBlurWithoutTheServerCall() throws {
+        let none = HUDWindowBlur(setter: nil, scheduler: .main, transparency: .fixed(reduced: false))
+        let glass = HUDGlassView(frame: CGRect(x: 0, y: 0, width: 200, height: 100), style: .panel, windowBlur: none)
+        XCTAssertEqual(glass.backdropMaterial, .visualEffect)
+        let effect = try XCTUnwrap((glass.subviews.first as? HUDBackdropView)?.effectView)
+        XCTAssertEqual(effect.material, .hudWindow)
+        let mask = NSImage(size: CGSize(width: 10, height: 10))
+        glass.maskImage = mask
+        XCTAssertTrue((glass.subviews.first as? HUDBackdropView)?.effectView?.maskImage === mask, "the ring cuts the classic blur")
+    }
+
+    func testGlassViewBlursItsWindowWhileInIt() {
+        var calls: [[Int]] = []
+        let clock = ManualClock()
+        let blur = HUDWindowBlur(setter: { calls.append([$0, $1]) }, scheduler: clock.scheduler,
+                                 transparency: .fixed(reduced: false))
+        let visible = NSScreen.main?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+        let w = HUDPanelWindow(contentRect: CGRect(x: visible.minX + 40, y: visible.minY + 40, width: 200, height: 100))
+        defer { w.close() }
+        let glass = HUDGlassView(frame: CGRect(x: 0, y: 0, width: 200, height: 100), style: .panel, windowBlur: blur)
+        w.contentView = glass
+        XCTAssertEqual(calls, [[w.windowNumber, HUDWindowBlur.radius]])
+        // A style change rebuilds the backdrop; the window stays blurred throughout.
+        glass.style = .strip
+        clock.advance(by: 1)
+        XCTAssertFalse(calls.contains([w.windowNumber, 0]))
+        w.contentView = NSView()
+        clock.advance(by: 0)
+        XCTAssertEqual(calls.last, [w.windowNumber, 0], "cleared when the glass leaves the window")
+    }
+
+    func testDockLabelIsOnTheFamilyBackdrop() throws {
+        let label = HUDDockLabelWindow()
+        defer { label.close() }
+        let glass = try XCTUnwrap(label.contentView as? HUDGlassView)
+        XCTAssertEqual(glass.backdropMaterial, HUDWindowBlur.shared.isUsable ? .windowBlur : .visualEffect)
+        XCTAssertGreaterThan(label.windowNumber, 0, "made without defer: its blur is set before it first shows")
+        XCTAssertEqual((glass.subviews.first as? HUDBackdropView)?.shape, .rounded(HUDDockLabelWindow.cornerRadius))
+        XCTAssertFalse(label.isOpaque)
     }
 
     func testPanelWindowRecipe() {

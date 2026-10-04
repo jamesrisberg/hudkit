@@ -7,7 +7,24 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Changed
+- The family's backdrop (`HUDGlassView`: hover panels, widgets, dock labels and every other
+  HUD glass) is the window server's own blur of what is behind the window, radius 25, under a
+  tint the view draws (black at 20 % in dark appearance, white at 20 % in light), with the same
+  border and sheen. HUDKit sets the blur on the window through a private call,
+  `CGSSetWindowBackgroundBlurRadius`, looked up at run time. On a system without it, and while
+  Reduce transparency is on, the backdrop is the classic `NSVisualEffectView` blur. The blur
+  covers whatever the window draws, so a window holding glass must not be opaque, and a panel
+  inside a screen-sized dimming overlay should use `material: .visualEffect`. A `maskImage` (a
+  ring) shapes the blur and tint rather than switching to the classic blur. The default
+  material is the new `HUDGlassView.Material.windowBlur`.
+
+### Removed
+- `HUDGlassView.Material.automatic` and `HUDGlassView.usesLiquidGlass`.
+
 ### Fixed
+- Panels, widgets and dock labels are already blurred when a desktop switch lands, instead of
+  showing opaque for a moment first.
 - HUD windows that stay on screen for a long time (the voice orb, the tool dock, parking orbs,
   widgets) no longer go missing from a desktop. After a desktop switch, sleep and wake, or a
   display change, HUDKit checks each one and puts back any the system dropped from the desktop

@@ -650,9 +650,25 @@ case "convert":
 ### 4.6 The panel UI
 
 The panel is a `HUDPanelWindow` (the window recipe, see section 5) whose content view is a
-`HUDGlassView` (Liquid Glass on macOS 26, a `.hudWindow` blur on earlier macOS) hosting the SwiftUI view.
-The template's `PanelController` sets that up; a SwiftUI-only view can use `.hudGlass()` instead,
-but the AppKit container is what lets `--snapshot` draw the content.
+`HUDGlassView` hosting the SwiftUI view. The template's `PanelController` sets that up; a
+SwiftUI-only view can use `.hudGlass()` instead, but the AppKit container is what lets
+`--snapshot` draw the content.
+
+What the glass is, and what it asks of the window:
+
+- The backdrop is the window server's blur of what is behind the window (radius 25) under a
+  tint `HUDGlassView` draws in its shape: black at 20 % in a dark appearance, white at 20 % in a
+  light one, with the style's border and sheen over it. The shape is the style's rounded rect,
+  or the opaque part of `maskImage` when one is set.
+- The blur is set on the window by one private call, `CGSSetWindowBackgroundBlurRadius`, which
+  HUDKit resolves at run time with `dlsym` and never links. Where it is missing, while the user
+  has Reduce transparency on, or with `material: .visualEffect`, the backdrop is the public
+  `NSVisualEffectView` (`.hudWindow`) cut to the same shape, with no tint.
+- The blur belongs to the whole window: the window server blurs what is behind it wherever the
+  window draws. So the window must not be opaque (`HUDPanelWindow` is clear), and anything
+  translucent the window draws outside the glass is blurred too. A screen-sized dimming
+  overlay that hosts a glass panel would blur the whole screen: give a panel inside such a
+  window `material: .visualEffect`.
 
 `Sources/TallyHUD/PanelView.swift` (replace):
 
@@ -695,8 +711,9 @@ import HUDKit
 import SwiftUI
 
 /// Owns the hover panel: a non-activating `HUDPanelWindow` whose content is a `HUDGlassView`
-/// (Liquid Glass on macOS 26) hosting the SwiftUI `PanelView`. (A SwiftUI-only panel can use
-/// `.hudGlass()` instead; the AppKit container keeps `--snapshot` able to draw the content alone.)
+/// (the family's blurred, tinted backdrop) hosting the SwiftUI `PanelView`. (A SwiftUI-only
+/// panel can use `.hudGlass()` instead; the AppKit container keeps `--snapshot` able to draw
+/// the content alone.)
 /// MacHUD shows it from its dock button (`panel show from= anchor= reason=hover`) and hides it
 /// when the pointer leaves (`panel hide to=`).
 @MainActor
@@ -814,8 +831,9 @@ final class PanelController {
 
 Style rules: dark appearance (the window recipe sets it), SF Symbols, system fonts, 16 pt
 padding, secondary/tertiary foreground styles for detail text, no opaque backgrounds over the
-glass. Glass styles: `.panel` (radius 20, 1 pt border, gloss) for floating panels, `.strip` for
-edge strips, `.plain` for window content.
+glass, and nothing translucent in the glass's window outside the glass (it would be blurred
+behind too; see 4.6). Glass styles: `.panel` (radius 20, 1 pt border, gloss) for floating
+panels, `.strip` for edge strips, `.plain` for window content.
 
 ### 4.7 The CLI
 
