@@ -289,10 +289,14 @@ public final class HUDSoftBackdropView: NSView {
     }
 
     /// The blur is given up on this view: the system's material takes over on the next turn,
-    /// not from inside AppKit's layer update.
+    /// not from inside AppKit's layer update. The repair episode ends with it, so the blur tried
+    /// again counts its repairs from none.
     private func giveUp(_ why: String) {
         failure = why
         endSecondLook()
+        episode?.cancel()
+        episode = nil
+        episodeRepairs = 0
         _ = scheduler.after(0) { [weak self] in self?.update() }
     }
 

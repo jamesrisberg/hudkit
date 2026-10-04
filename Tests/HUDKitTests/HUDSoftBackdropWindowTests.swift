@@ -217,6 +217,32 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         XCTAssertTrue(waitUntil { isAppKitsOwn(view.effectView) })
     }
 
+    func testTheBlurTriedAgainStartsANewEpisode() throws {
+        let center = NotificationCenter()
+        let w = window()
+        let view = soft(in: w, transparency: HUDTransparencySetting(isReduced: { false }, center: center))
+        w.orderFrontRegardless()
+        XCTAssertTrue(waitUntil { isBlurred(view.effectView) })
+        clock.advance(by: 0)
+        func putBackAndSettle() throws {
+            try XCTUnwrap(backdropLayer(view.effectView)).filters = nil
+            monitor.note(.activeSpace)
+            clock.advance(by: HUDEnvironmentMonitor.defaultSettleDelay)
+        }
+        for _ in 0...HUDSoftBackdropView.repairLimit { try putBackAndSettle() }
+        XCTAssertEqual(view.path, .systemMaterial, "given up")
+        // A display accessibility setting changes at once, well inside the episode: the blur is tried again.
+        center.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
+        XCTAssertEqual(view.path, .blur)
+        XCTAssertTrue(waitUntil { isBlurred(view.effectView) })
+        clock.advance(by: 0)
+        // One revert is one repair of a new episode, not the tenth of the old one.
+        try putBackAndSettle()
+        XCTAssertEqual(view.path, .blur)
+        XCTAssertTrue(isBlurred(view.effectView))
+        XCTAssertEqual(logs.filter { $0.contains("kept putting its own material back") }.count, 1, "\(logs)")
+    }
+
     func testMovingToAnotherWindowIsNoRepair() throws {
         let a = window(), b = window()
         let view = soft(in: a)
