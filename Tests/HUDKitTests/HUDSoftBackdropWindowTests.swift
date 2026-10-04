@@ -232,6 +232,26 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         XCTAssertTrue(logs.last?.contains("systemMaterial: no ") == true, "\(logs)")
     }
 
+    func testAMaterialWithoutABackdropLayerIsLookedAtOnceMoreBeforeTheBlurIsGivenUp() throws {
+        // The live lookup with a backdrop layer class AppKit's material does not have, until the
+        // test puts one there.
+        let pieces = HUDSoftBackdropPieces.resolve { $0 == "CABackdropLayer" ? NotAppKitsBackdrop.self : NSClassFromString($0) }
+        let w = window()
+        let view = soft(in: w, pieces: pieces)
+        let effect = try XCTUnwrap(view.effectView)
+        w.orderFrontRegardless()
+        XCTAssertTrue(waitUntil { backdropLayer(effect) != nil }, "AppKit built the material; the first look found no backdrop layer")
+        let material = try XCTUnwrap(backdropLayer(effect)?.superlayer)
+        let late = NotAppKitsBackdrop()
+        material.addSublayer(late)
+        clock.advance(by: 0)
+        XCTAssertEqual(view.path, .blur, "the second look found it")
+        XCTAssertTrue(view.effectView === effect)
+        XCTAssertEqual(filterTypes(late), ["gaussianBlur"])
+        XCTAssertTrue((material.sublayers ?? []).allSatisfy { $0 === late || $0.isHidden })
+        XCTAssertEqual(logs.count, 1, "\(logs)")
+    }
+
     func testThePathIsLoggedOnceWhenChosen() {
         var reduced = false
         let center = NotificationCenter()

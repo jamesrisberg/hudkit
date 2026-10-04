@@ -91,8 +91,10 @@ public final class HUDSoftBackdropView: NSView {
     /// The blur has been on this effect view's backdrop layer: AppKit's filters found after
     /// that are a repair.
     private var effectTuned = false
-    /// Why the blur was given up on this view: it did not stay, or there was no backdrop layer.
+    /// Why the blur was given up on this view: it did not stay, or two looks found no backdrop layer.
     private var failure: String?
+    /// A look the turn after one that found the material built with no backdrop layer in it.
+    private var secondLook: HUDScheduledWork?
     private var settled: HUDEnvironmentMonitor.Observation?
     /// The current repair episode; nil between episodes.
     private var episode: HUDScheduledWork?
@@ -239,8 +241,9 @@ public final class HUDSoftBackdropView: NSView {
     // MARK: Keeping the blur
 
     /// Looks at the effect view's backdrop layer and puts the blur back where AppKit's own
-    /// filters or layers are found. Cheap when nothing changed.
-    private func check(_ trigger: String) {
+    /// filters or layers are found. Cheap when nothing changed. A material with no backdrop layer
+    /// in it is looked at once more on the next turn before the blur is given up.
+    private func check(_ trigger: String, isSecondLook: Bool = false) {
         guard path == .blur, failure == nil, let effect = effectView, effect.tunes, let filter,
               case .success(let pieces) = pieces else { return }
         // The setting may have changed before its notification arrived; leave the material to
@@ -253,15 +256,37 @@ public final class HUDSoftBackdropView: NSView {
         case .notBuilt:
             break
         case .ours:
+            endSecondLook()
             effectTuned = true
         case .applied(let found):
+            endSecondLook()
             if effectTuned { repaired(found, at: trigger) }
             effectTuned = true
+        case .noBackdropLayer(let why):
+            if isSecondLook {
+                giveUp(why)
+            } else if secondLook == nil {
+                secondLook = scheduler.after(0) { [weak self] in
+                    self?.secondLook = nil
+                    self?.check("a second look for the backdrop layer", isSecondLook: true)
+                }
+            }
         case .failed(let why):
-            failure = why
-            // Not from inside AppKit's layer update: the system's material takes over next turn.
-            _ = scheduler.after(0) { [weak self] in self?.update() }
+            giveUp(why)
         }
+    }
+
+    private func endSecondLook() {
+        secondLook?.cancel()
+        secondLook = nil
+    }
+
+    /// The blur is given up on this view: the system's material takes over on the next turn,
+    /// not from inside AppKit's layer update.
+    private func giveUp(_ why: String) {
+        failure = why
+        endSecondLook()
+        _ = scheduler.after(0) { [weak self] in self?.update() }
     }
 
     private func repaired(_ found: String, at trigger: String) {
@@ -379,6 +404,8 @@ enum HUDSoftBackdropTuner {
         case ours
         /// AppKit's own was found (what) and replaced.
         case applied(String)
+        /// The material is built but no backdrop layer was found in it (why).
+        case noBackdropLayer(String)
         /// The blur cannot be put on this material (why).
         case failed(String)
     }
@@ -387,7 +414,7 @@ enum HUDSoftBackdropTuner {
     static func tune(_ root: CALayer?, backdropClass: AnyClass, filter: NSObject) -> Outcome {
         guard let root, !(root.sublayers ?? []).isEmpty else { return .notBuilt }
         guard let backdrop = find(backdropClass, under: root), let material = backdrop.superlayer else {
-            return .failed("no \(NSStringFromClass(backdropClass)) among the material's layers")
+            return .noBackdropLayer("no \(NSStringFromClass(backdropClass)) among the material's layers")
         }
         let others = (material.sublayers ?? []).filter { $0 !== backdrop }
         let appKits = backdrop.filters

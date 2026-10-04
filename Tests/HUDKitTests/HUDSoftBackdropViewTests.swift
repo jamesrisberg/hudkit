@@ -250,7 +250,7 @@ final class HUDSoftBackdropViewTests: XCTestCase {
         XCTAssertEqual(HUDSoftBackdropTuner.tune(CALayer(), backdropClass: Backdrop.self, filter: filter), .notBuilt)
         let (root, _) = try material(backdrop: CALayer())
         XCTAssertEqual(HUDSoftBackdropTuner.tune(root, backdropClass: Backdrop.self, filter: filter),
-                       .failed("no \(NSStringFromClass(Backdrop.self)) among the material's layers"))
+                       .noBackdropLayer("no \(NSStringFromClass(Backdrop.self)) among the material's layers"))
     }
 
     func testABlurThatDoesNotStayFails() throws {
