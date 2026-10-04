@@ -39,7 +39,7 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 - HUD windows that stay on screen for a long time (the voice orb, the tool dock, parking orbs,
   widgets) no longer go missing from a desktop. After a desktop switch, sleep and wake, or a
   display change, HUDKit checks each one and puts back any the system dropped from the desktop
-  you are looking at, within about a second. Windows that are fine are left alone. A window that
+  you are looking at, within a second or two. Windows that are fine are left alone. A window that
   does not come back at once (a wake still in progress, a widget on a Split View desktop) is
   tried again at most every 30 seconds while it stays hidden, and the log says when it is back.
 - Switching desktops or waking the Mac no longer resets every widget's window in the middle of
