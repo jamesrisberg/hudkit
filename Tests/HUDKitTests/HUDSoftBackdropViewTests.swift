@@ -256,9 +256,27 @@ final class HUDSoftBackdropViewTests: XCTestCase {
     func testABlurThatDoesNotStayFails() throws {
         guard case .success(let found) = HUDSoftBackdropPieces.live else { throw XCTSkip("no private pieces") }
         let filter = try XCTUnwrap(found.makeFilter(25))
-        let (root, _) = try material(backdrop: StubbornBackdrop())
+        let (root, others) = try material(backdrop: StubbornBackdrop())
         XCTAssertEqual(HUDSoftBackdropTuner.tune(root, backdropClass: StubbornBackdrop.self, filter: filter),
                        .failed("the blur did not stay on the backdrop layer (its filters read back [gaussianBlur, gaussianBlur])"))
+        XCTAssertTrue(others.allSatisfy { !$0.isHidden }, "AppKit's material is left whole: nothing hidden")
+    }
+
+    func testALayerThatWillNotHideFailsAndLeavesTheMaterialWhole() throws {
+        guard case .success(let found) = HUDSoftBackdropPieces.live else { throw XCTSkip("no private pieces") }
+        let filter = try XCTUnwrap(found.makeFilter(25))
+        let backdrop = Backdrop()
+        let (root, others) = try material(backdrop: backdrop)
+        let own = backdrop.filters
+        let stubborn = AlwaysShown()
+        stubborn.name = "tone"
+        root.sublayers?.first?.replaceSublayer(others[1], with: stubborn)
+        XCTAssertEqual(HUDSoftBackdropTuner.tune(root, backdropClass: Backdrop.self, filter: filter),
+                       .failed("the material's tone layer did not stay hidden"))
+        XCTAssertEqual(backdrop.filters?.count, own?.count, "AppKit's filters are put back")
+        XCTAssertTrue((backdrop.filters?.first as AnyObject?) === (own?.first as AnyObject?))
+        XCTAssertFalse(others[0].isHidden, "what was hidden is shown again")
+        XCTAssertFalse(others[2].isHidden)
     }
 }
 
@@ -289,4 +307,12 @@ private final class FilterWithoutRadius: NSObject {
     @objc class func filterTypes() -> [String] { ["gaussianBlur"] }
     @objc class func filterWithType(_ type: String) -> FilterWithoutRadius { FilterWithoutRadius() }
     @objc var inputKeys: [String] { ["inputAmount"] }
+}
+
+/// A material layer that will not be hidden.
+private final class AlwaysShown: CALayer {
+    override var isHidden: Bool {
+        get { false }
+        set {}
+    }
 }

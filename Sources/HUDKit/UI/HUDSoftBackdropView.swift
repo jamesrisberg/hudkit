@@ -368,7 +368,8 @@ final class HUDSoftBackdropTint: NSView {
 }
 
 /// Puts one filter of ours on a material's backdrop layer in place of AppKit's, hides the
-/// material's other layers (fill, tone, tint), and says what it found.
+/// material's other layers (fill, tone, tint), and says what it found. Where either does not
+/// hold, it leaves the material as AppKit had it.
 enum HUDSoftBackdropTuner {
     enum Outcome: Equatable {
         /// The material's layers are not there: the view has not been on screen yet, or AppKit
@@ -389,23 +390,36 @@ enum HUDSoftBackdropTuner {
             return .failed("no \(NSStringFromClass(backdropClass)) among the material's layers")
         }
         let others = (material.sublayers ?? []).filter { $0 !== backdrop }
+        let appKits = backdrop.filters
         var found: [String] = []
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if !hasOnly(filter, backdrop) {
+        defer { CATransaction.commit() }
+        // The filter first, and the other layers hidden only once it has held: a failure leaves
+        // AppKit's material as it was.
+        let replaced = !hasOnly(filter, backdrop)
+        if replaced {
             found.append("filters [\(filterNames(backdrop))]")
             backdrop.filters = [filter]
+            guard hasOnly(filter, backdrop) else {
+                let readBack = filterNames(backdrop)
+                backdrop.filters = appKits
+                return .failed("the blur did not stay on the backdrop layer (its filters read back [\(readBack)])")
+            }
         }
         let shown = others.filter { !$0.isHidden }
-        if !shown.isEmpty {
-            found.append(shown.map { $0.name ?? NSStringFromClass(type(of: $0)) }.joined(separator: ", ") + " shown")
-            shown.forEach { $0.isHidden = true }
+        shown.forEach { $0.isHidden = true }
+        if let stuck = shown.first(where: { !$0.isHidden }) {
+            shown.forEach { $0.isHidden = false }
+            if replaced { backdrop.filters = appKits }
+            return .failed("the material's \(layerName(stuck)) layer did not stay hidden")
         }
-        CATransaction.commit()
-        guard hasOnly(filter, backdrop), others.allSatisfy(\.isHidden) else {
-            return .failed("the blur did not stay on the backdrop layer (its filters read back [\(filterNames(backdrop))])")
-        }
+        if !shown.isEmpty { found.append(shown.map(layerName).joined(separator: ", ") + " shown") }
         return found.isEmpty ? .ours : .applied(found.joined(separator: "; "))
+    }
+
+    private static func layerName(_ layer: CALayer) -> String {
+        layer.name ?? NSStringFromClass(type(of: layer))
     }
 
     private static func find(_ cls: AnyClass, under layer: CALayer) -> CALayer? {
