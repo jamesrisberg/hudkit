@@ -104,7 +104,8 @@ tint layers hidden; the backdrop layer and the filter are private (`CABackdropLa
 filters back (on an appearance change, it builds the material again); the view checks at the
 end of each of AppKit's updates of the material, after layout, a move to a window and the
 settled signal, and puts the blur back, so the window shows the blur from its first frame with
-no call from its owner. Where a private piece is missing or the blur does not stay, and while
+no call from its owner. Where a private piece is missing, the blur does not stay or AppKit
+keeps putting its own material back (more than eight repairs less than 2 s apart), and while
 Reduce transparency is on, it is the system's own material through the same field. `path` and
 `pathReason` say which and why; each choice, and each episode of putting the blur back, is
 logged under subsystem `xyz.machud.hudkit`, category `softbackdrop`. Put it under the content of

@@ -185,6 +185,38 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         XCTAssertTrue(repairs.isEmpty, "\(logs)")
     }
 
+    func testAppKitPuttingItsMaterialBackAgainAndAgainGivesTheBlurUp() throws {
+        let w = window()
+        let view = soft(in: w)
+        w.orderFrontRegardless()
+        XCTAssertTrue(waitUntil { isBlurred(view.effectView) })
+        clock.advance(by: 0)
+        /// AppKit's filters back on the backdrop layer, found at the next settled signal.
+        func putBackAndSettle() throws {
+            try XCTUnwrap(backdropLayer(view.effectView)).filters = nil
+            monitor.note(.activeSpace)
+            clock.advance(by: HUDEnvironmentMonitor.defaultSettleDelay)
+        }
+        let limit = HUDSoftBackdropView.repairLimit
+        XCTAssertEqual(limit, 8)
+        for _ in 0..<limit { try putBackAndSettle() }
+        XCTAssertEqual(view.path, .blur, "\(limit) repairs in one episode are allowed")
+        XCTAssertTrue(isBlurred(view.effectView))
+        // A new episode counts from the start.
+        clock.advance(by: HUDSoftBackdropView.repairEpisodeGap)
+        for _ in 0..<limit { try putBackAndSettle() }
+        XCTAssertEqual(view.path, .blur)
+        XCTAssertEqual(repairs.count, 2, "one line per episode: \(logs)")
+        // One more in the same episode: the system's material takes over, said once.
+        try putBackAndSettle()
+        XCTAssertEqual(view.path, .systemMaterial)
+        XCTAssertEqual(view.pathReason, "AppKit kept putting its own material back: more than \(limit) repairs less than 2 s apart")
+        XCTAssertFalse(try XCTUnwrap(view.effectView).tunes)
+        XCTAssertEqual(logs.filter { $0.contains("kept putting its own material back") }.count, 1, "\(logs)")
+        XCTAssertEqual(repairs.count, 2, "\(logs)")
+        XCTAssertTrue(waitUntil { isAppKitsOwn(view.effectView) })
+    }
+
     func testMovingToAnotherWindowIsNoRepair() throws {
         let a = window(), b = window()
         let view = soft(in: a)

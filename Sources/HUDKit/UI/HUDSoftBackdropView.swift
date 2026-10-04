@@ -21,8 +21,8 @@ import QuartzCore
 ///   type and input key) are looked up at run time and checked before anything is set.
 /// - `.systemMaterial`: the same view as AppKit draws it, through the same field: while the user
 ///   has Reduce transparency on (the system makes the material opaque), where a private piece is
-///   missing, or where the blur did not stay on the backdrop layer. A change of the display
-///   accessibility settings tries the blur again.
+///   missing, where the blur did not stay on the backdrop layer, or where AppKit kept putting its
+///   own material back. A change of the display accessibility settings tries the blur again.
 /// - `.none`: no field; nothing is drawn.
 ///
 /// AppKit builds the material's layers when it updates the effect view's layer, in the display
@@ -31,8 +31,9 @@ import QuartzCore
 /// layout, an appearance change and a move to a window, and once a Space switch, wake or screen
 /// change has settled (`HUDEnvironmentMonitor`). Where it finds AppKit's filters or layers it
 /// puts the blur back and logs that once per episode (repairs less than `repairEpisodeGap`
-/// apart are one episode). So a window shows the blur from its first frame, with nothing for its
-/// owner to call before showing it.
+/// apart are one episode); more than `repairLimit` repairs in one episode give the blur up. So a
+/// window shows the blur from its first frame, with nothing for its owner to call before
+/// showing it.
 ///
 /// The field is copied once when it is set, to stretch rather than tile; AppKit draws the
 /// effect view's mask, and the view its tint, at the bounds' size when that changes.
@@ -72,6 +73,8 @@ public final class HUDSoftBackdropView: NSView {
 
     /// Repairs less than this far apart are one episode, logged once.
     static let repairEpisodeGap: TimeInterval = 2
+    /// More repairs than this in one episode give the blur up.
+    static let repairLimit = 8
 
     /// The effect view, below the tint.
     private(set) var effectView: HUDSoftBackdropEffectView?
@@ -91,13 +94,16 @@ public final class HUDSoftBackdropView: NSView {
     /// The blur has been on this effect view's backdrop layer: AppKit's filters found after
     /// that are a repair.
     private var effectTuned = false
-    /// Why the blur was given up on this view: it did not stay, or two looks found no backdrop layer.
+    /// Why the blur was given up on this view: it did not stay, two looks found no backdrop layer,
+    /// or AppKit kept putting its material back.
     private var failure: String?
     /// A look the turn after one that found the material built with no backdrop layer in it.
     private var secondLook: HUDScheduledWork?
     private var settled: HUDEnvironmentMonitor.Observation?
     /// The current repair episode; nil between episodes.
     private var episode: HUDScheduledWork?
+    /// Repairs in the current episode.
+    private var episodeRepairs = 0
     private var logged: (path: Path, reason: String)?
 
     public override convenience init(frame frameRect: NSRect) {
@@ -289,10 +295,19 @@ public final class HUDSoftBackdropView: NSView {
         _ = scheduler.after(0) { [weak self] in self?.update() }
     }
 
+    /// Counts a repair in its episode; past `repairLimit` AppKit is taken to keep its material,
+    /// and the blur is given up.
     private func repaired(_ found: String, at trigger: String) {
         let first = episode == nil
+        if first { episodeRepairs = 0 }
+        episodeRepairs += 1
         episode?.cancel()
         episode = scheduler.after(Self.repairEpisodeGap) { [weak self] in self?.episode = nil }
+        if episodeRepairs > Self.repairLimit {
+            giveUp("AppKit kept putting its own material back: more than \(Self.repairLimit) repairs less than "
+                   + "\(Self.format(Self.repairEpisodeGap)) s apart")
+            return
+        }
         guard first else { return }
         log("\(logName): AppKit had put its own material back (\(found)), found at \(trigger); the blur is on again "
             + "(repairs less than \(Self.format(Self.repairEpisodeGap)) s apart are logged once)")
