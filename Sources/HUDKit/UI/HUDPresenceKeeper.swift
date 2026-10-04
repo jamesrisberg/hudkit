@@ -29,7 +29,7 @@ import AppKit
 /// - Displaced: the window server reports the window somewhere other than its AppKit frame.
 ///   That is how it reports every all-Spaces window while a Space switch is in flight, so it is
 ///   only reported, never repaired, and only when the window is still displaced by the same
-///   amount `displacementRecheckDelay` later and not every window kept on that screen is
+///   amount `displacementRecheckDelay` later, unless two or more windows on that screen are all
 ///   shifted by one common amount (a swipe held in place).
 ///
 /// Each repair and report is logged (`HUDLog.presence`) with the window, what was wrong and the
