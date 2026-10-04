@@ -185,6 +185,23 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         XCTAssertTrue(repairs.isEmpty, "\(logs)")
     }
 
+    func testMovingToAnotherWindowIsNoRepair() throws {
+        let a = window(), b = window()
+        let view = soft(in: a)
+        a.orderFrontRegardless()
+        b.orderFrontRegardless()
+        XCTAssertTrue(waitUntil { isBlurred(view.effectView) })
+        clock.advance(by: 0)
+        let first = try XCTUnwrap(backdropLayer(view.effectView))
+        b.contentView = view
+        XCTAssertTrue(waitUntil { backdropLayer(view.effectView).map { $0 !== first } ?? false && isBlurred(view.effectView) },
+                      "AppKit builds the material again in the new window, and it is blurred")
+        clock.advance(by: 0)
+        spin()
+        XCTAssertTrue(isBlurred(view.effectView))
+        XCTAssertTrue(repairs.isEmpty, "\(logs)")
+    }
+
     func testTheSettledSignalPutsTheBlurBack() throws {
         let w = window()
         let view = soft(in: w)

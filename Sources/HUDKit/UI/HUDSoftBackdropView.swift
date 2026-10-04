@@ -329,6 +329,12 @@ public final class HUDSoftBackdropView: NSView {
         _ = scheduler.after(0) { [weak self] in self?.check("the turn after an appearance change") }
     }
 
+    public override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        // AppKit builds the material again in another window: the blur put on it then is no repair.
+        if newWindow !== window { effectTuned = false }
+    }
+
     public override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else {
