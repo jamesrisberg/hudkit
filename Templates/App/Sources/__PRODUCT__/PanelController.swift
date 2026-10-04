@@ -3,8 +3,9 @@ import HUDKit
 import SwiftUI
 
 /// Owns the hover panel: a non-activating `HUDPanelWindow` whose content is a `HUDGlassView`
-/// (Liquid Glass on macOS 26) hosting the SwiftUI `PanelView`. (A SwiftUI-only panel can use
-/// `.hudGlass()` instead; the AppKit container keeps `--snapshot` able to draw the content alone.)
+/// (the family's blurred, tinted backdrop) hosting the SwiftUI `PanelView`. (A SwiftUI-only
+/// panel can use `.hudGlass()` instead; the AppKit container keeps `--snapshot` able to draw
+/// the content alone.)
 /// MacHUD shows it from its dock button (`panel show from= anchor= reason=hover`) and hides it
 /// when the pointer leaves (`panel hide to=`).
 @MainActor

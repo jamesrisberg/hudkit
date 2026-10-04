@@ -113,14 +113,15 @@ public extension HUDDockStripDelegate {
     func dockStrip(_ strip: HUDDockStripView, didHover item: HUDDockItem?) {}
 }
 
-/// A dock strip: the MacHUD tool dock's glass slab (Liquid Glass on macOS 26, a
-/// behind-window `.popover` blur before it), `HUDDockStyle` corners and hairline border,
-/// items as `HUDDockTile`s with the indicator dot on the screen-edge side, dividers between
-/// groups, hover magnification, hover labels (a glass pill naming the item under the pointer,
-/// outside the strip), and dragging, which reports the snapped `HUDDockPosition` to the
-/// delegate. A press anywhere on the strip, an item included, is a click until it moves
-/// `dragThreshold`, then a drag of the whole strip, never both. At a corner the slab is an
-/// L: the view is masked to the union of its arms.
+/// A dock strip: the MacHUD tool dock's slab on the family's backdrop (the window server's
+/// blur of what is behind the window, under a tint in the slab's shape), `HUDDockStyle`
+/// corners and hairline border, items as `HUDDockTile`s with the indicator dot on the
+/// screen-edge side, dividers between groups, hover magnification, hover labels (a glass pill
+/// naming the item under the pointer, outside the strip), and dragging, which reports the
+/// snapped `HUDDockPosition` to the delegate. A press anywhere on the strip, an item
+/// included, is a click until it moves `dragThreshold`, then a drag of the whole strip, never
+/// both. At a corner the slab is an L, the union of its two arms (`outline`); clicks outside
+/// the arms are not the strip's.
 ///
 /// Lay it out either with an explicit placement (`apply(items:placement:)`, in this view's
 /// coordinates: e.g. `HUDDockStyle.placement(…).local`) or as a straight run filling its
@@ -146,51 +147,43 @@ public final class HUDDockStripView: NSView {
     public private(set) var placement = HUDDockPlacement(frame: .zero, segments: [], items: [], itemEdges: [], dividers: [])
     public var items: [HUDDockItem] { tiles.map(\.item) }
 
-    private let backdrop: NSView
+    /// The slab's backdrop, the bottom subview: the tint, and so the window server's blur, in
+    /// the shape of `outline`. Nothing on the strip is a layer mask: a backdrop under one
+    /// showed white splotches during a desktop switch.
+    private let backdrop: HUDBackdropView
     private let overlay = HUDDockOverlayView()
-    private let shape = CAShapeLayer()
     private let border = CAShapeLayer()
     private var dividerViews: [NSView] = []
     private var run: (groups: [Int], edge: HUDEdge)?
 
-    public init(frame: NSRect = .zero, style: HUDDockStyle = .standard) {
+    public convenience init(frame: NSRect = .zero, style: HUDDockStyle = .standard) {
+        self.init(frame: frame, style: style, windowBlur: .shared)
+    }
+
+    /// `windowBlur` stands in for the window server's blur (tests).
+    init(frame: NSRect, style: HUDDockStyle, windowBlur: HUDWindowBlur) {
         self.style = style
         effectiveStyle = style
-        backdrop = Self.makeBackdrop(style)
+        // Framed and given the outline by applyShape() below.
+        backdrop = HUDBackdropView(frame: .zero, material: .windowBlur, shape: .path(CGMutablePath()), windowBlur: windowBlur)
         super.init(frame: frame)
         wantsLayer = true
-        layer?.mask = shape
-        backdrop.frame = bounds
         backdrop.autoresizingMask = [.width, .height]
         addSubview(backdrop)
         overlay.frame = bounds
         overlay.autoresizingMask = [.width, .height]
         overlay.strip = self
         addSubview(overlay)
-        border.fillColor = nil
+        border.strokeColor = nil
         layer?.addSublayer(border)
         updateBorder()
+        applyShape()
     }
 
     public required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
-    /// True when the backdrop is Liquid Glass.
-    public var usesLiquidGlass: Bool { !(backdrop is NSVisualEffectView) }
-
-    private static func makeBackdrop(_ style: HUDDockStyle) -> NSView {
-        #if compiler(>=6.2)
-        if #available(macOS 26, *) {
-            let glass = HUDDockPassthroughGlass()
-            glass.cornerRadius = 0  // the view's mask shapes it
-            return glass
-        }
-        #endif
-        let effect = HUDDockPassthroughEffect()
-        effect.material = style.fallbackMaterial
-        effect.blendingMode = .behindWindow
-        effect.state = .active
-        return effect
-    }
+    /// The backdrop in use (tests).
+    var backdropMaterial: HUDGlassView.Material { backdrop.material }
 
     // MARK: Chrome
 
@@ -207,26 +200,34 @@ public final class HUDDockStripView: NSView {
     }
 
     private func updateBorder() {
-        border.lineWidth = style.borderWidth
-        border.strokeColor = borderColor.cgColor
+        border.fillColor = borderColor.cgColor
     }
 
     /// The slab's outline in this view's coordinates.
     public var outline: CGPath { effectiveStyle.outline(placement.segments.isEmpty ? [bounds] : placement.segments) }
+
+    /// The hairline border as a filled band: the part of a `borderWidth` stroke along
+    /// `outline` that lies on the slab, so it is `borderWidth / 2` wide everywhere, at the
+    /// bounds and along an L's inner sides alike, and never outside the tint.
+    private static func borderBand(_ outline: CGPath, width: CGFloat) -> CGPath {
+        outline.copy(strokingWithWidth: width, lineCap: .butt, lineJoin: .miter, miterLimit: 10).intersection(outline)
+    }
 
     public override func layout() {
         super.layout()
         if run != nil { relayoutRun() } else { applyShape() }
     }
 
+    /// Fits the backdrop and the border to the outline at once (no implicit animation), so
+    /// both follow a run that relays out every frame of a window animation.
     private func applyShape() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         let path = outline
-        shape.frame = bounds
-        shape.path = path
+        backdrop.frame = bounds
+        backdrop.shape = .path(path)
         border.frame = bounds
-        border.path = path
+        border.path = Self.borderBand(path, width: style.borderWidth)
         CATransaction.commit()
     }
 
@@ -607,10 +608,9 @@ public final class HUDDockStripView: NSView {
             tile.badgeView.drawBadge(in: tile.badgeView.frame)
         }
         cg.restoreGState()
-        cg.addPath(path)
-        cg.setStrokeColor(borderColor.cgColor)
-        cg.setLineWidth(style.borderWidth)
-        cg.strokePath()
+        cg.addPath(Self.borderBand(path, width: style.borderWidth))
+        cg.setFillColor(borderColor.cgColor)
+        cg.fillPath()
         NSGraphicsContext.restoreGraphicsState()
         return rep
     }
@@ -1077,17 +1077,6 @@ private final class HUDDockDivider: NSView {
     }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
-
-private final class HUDDockPassthroughEffect: NSVisualEffectView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-
-#if compiler(>=6.2)
-@available(macOS 26, *)
-private final class HUDDockPassthroughGlass: NSGlassEffectView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-}
-#endif
 
 // MARK: - SwiftUI
 

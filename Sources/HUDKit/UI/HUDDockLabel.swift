@@ -120,8 +120,11 @@ final class HUDDockLabelWindow: NSPanel {
     }
 
     init() {
+        // Made without defer: the backdrop's blur (`HUDWindowBlur`) is set on a window once it
+        // has a window number, and a deferred window gets one only when first ordered in, so
+        // its blur would arrive part-way through the fade-in.
         super.init(contentRect: CGRect(x: 0, y: 0, width: 40, height: 20), styleMask: [.borderless, .nonactivatingPanel],
-                   backing: .buffered, defer: true)
+                   backing: .buffered, defer: false)
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
