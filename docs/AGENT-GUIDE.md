@@ -670,9 +670,10 @@ What the glass is, and what it asks of the window:
   overlay that hosts a glass panel would blur the whole screen: give a panel inside such a
   window `material: .visualEffect`.
 - A backdrop whose edge fades out rather than ending in a line (a field, such as a radial
-  menu's, not a shape) is `HUDSoftBackdropView`: a blur of the same radius shown through an
-  alpha image. It goes in a window with no `HUDGlassView` in it; see the README's Chrome
-  section.
+  menu's, not a shape) is `HUDSoftBackdropView`: a Gaussian blur of radius 25 shown through an
+  alpha image. Nothing in its window may be on the window server's blur (a `HUDGlassView` with
+  the `.windowBlur` material, a dock strip): that blur covers everything the window draws and
+  ends in a line. See the README's Chrome section.
 
 `Sources/TallyHUD/PanelView.swift` (replace):
 

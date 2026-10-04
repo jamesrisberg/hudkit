@@ -8,9 +8,10 @@ import QuartzCore
 /// in one window (a radial menu's field: opaque in the middle, falling to clear at the rim).
 /// `tint`, when set, is drawn over the blur through the same field. It never takes the mouse.
 ///
-/// Put it under the content of a window that is not opaque, and keep `HUDGlassView` out of
-/// that window: the glass's blur covers everything its window draws (`HUDWindowBlur`), so it
-/// would end in a line where the field's alpha runs out.
+/// Put it under the content of a window that is not opaque, with nothing in that window on the
+/// window server's blur (`HUDWindowBlur`: a `HUDGlassView` with the `.windowBlur` material, a
+/// `HUDDockStripView`). That blur covers everything the window draws, so it would end in a line
+/// where the field's alpha runs out.
 ///
 /// `path` says how it draws and `pathReason` why. Each new path or reason is logged once while
 /// the view is in a window (subsystem `xyz.machud.hudkit`, category `softbackdrop`):

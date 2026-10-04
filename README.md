@@ -109,8 +109,10 @@ keeps putting its own material back (more than eight repairs less than 2 s apart
 Reduce transparency is on, it is the system's own material through the same field. `path` and
 `pathReason` say which and why; each choice, and each episode of putting the blur back, is
 logged under subsystem `xyz.machud.hudkit`, category `softbackdrop`. Put it under the content of
-a window that is not opaque, and keep `HUDGlassView` out of that window: the glass's blur
-covers everything the window draws, so it would end in a line where the field fades out.
+a window that is not opaque, with nothing in that window on the window server's blur: no
+`HUDGlassView` with the `.windowBlur` material and no `HUDDockStripView`. That blur covers
+everything the window draws, so it would end in a line where the field fades out. A
+`HUDGlassView` with `material: .visualEffect` does not use it.
 
 `HUDPanelWindow(contentRect:keyable:level:)` is the borderless, non-activating, floating,
 all-Spaces hover panel; `HUDPanelWindow(contentRect:behavior: .windowed)` is the same glass as a
