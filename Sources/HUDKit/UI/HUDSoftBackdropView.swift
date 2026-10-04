@@ -79,7 +79,7 @@ public final class HUDSoftBackdropView: NSView {
     /// The effect view, below the tint.
     private(set) var effectView: HUDSoftBackdropEffectView?
     /// Draws `tint` through the field.
-    private(set) var tintView: HUDSoftBackdropTint?
+    private(set) var tintView: HUDBackdropMaskTint?
     /// `field`, stretched over the bounds when drawn (no cap insets, `.stretch`).
     private(set) var stretchedField: NSImage?
     /// Called with each line after it is logged (tests).
@@ -194,10 +194,10 @@ public final class HUDSoftBackdropView: NSView {
             }
             if effectView?.maskImage !== stretchedField { effectView?.maskImage = stretchedField }
             if let tint {
-                let view = tintView ?? HUDSoftBackdropTint(frame: bounds)
+                let view = tintView ?? HUDBackdropMaskTint(frame: bounds)
                 view.frame = bounds
                 view.autoresizingMask = [.width, .height]
-                view.field = stretchedField
+                view.mask = stretchedField
                 view.color = tint
                 if view.superview !== self { addSubview(view, positioned: .above, relativeTo: effectView) }
                 tintView = view
@@ -388,28 +388,6 @@ final class HUDSoftBackdropEffectView: NSVisualEffectView {
     override func updateLayer() {
         super.updateLayer()
         onLayerUpdate?()
-    }
-}
-
-/// The tint of a soft backdrop: `color` where the field is, times the field's alpha, the field
-/// stretched over the bounds as the effect view's mask is. Drawn again when the field, the
-/// colour, the size or the appearance changes.
-final class HUDSoftBackdropTint: NSView {
-    var field: NSImage? { didSet { if field !== oldValue { needsDisplay = true } } }
-    var color: NSColor = .clear { didSet { if color != oldValue { needsDisplay = true } } }
-
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        needsDisplay = true
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        guard let field else { return }
-        color.setFill()
-        bounds.fill()
-        field.draw(in: bounds, from: .zero, operation: .destinationIn, fraction: 1)
     }
 }
 

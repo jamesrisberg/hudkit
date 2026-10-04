@@ -209,6 +209,30 @@ final class HUDSoftBackdropViewTests: XCTestCase {
         XCTAssertNil(tint.superview)
     }
 
+    func testTheTintIsTheFamilysMaskTintAndIsDrawnAgainOnAnAppearanceChange() throws {
+        let view = soft()
+        view.field = centreField(frame.size)
+        view.tint = NSColor.labelColor
+        let tint: HUDBackdropMaskTint = try XCTUnwrap(view.tintView)
+        XCTAssertTrue(tint.mask === view.stretchedField)
+        // In a window that is never ordered in: there AppKit marks the view for display on an
+        // appearance change (outside a window needsDisplay does not read back).
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = view
+        tint.needsDisplay = false
+        tint.appearance = NSAppearance(named: .aqua)
+        XCTAssertTrue(tint.needsDisplay, "a dynamic colour is drawn again in the new appearance")
+        // The window-blur backdrop's mask tint is the same view.
+        let mask = centreField(frame.size)
+        let backdrop = HUDBackdropView(frame: frame, material: .windowBlur, shape: .mask(mask),
+                                       windowBlur: HUDWindowBlur(setter: { _, _ in }, scheduler: clock.scheduler,
+                                                                 transparency: .fixed(reduced: false)))
+        let other = try XCTUnwrap(backdrop.subviews.first as? HUDBackdropMaskTint)
+        XCTAssertTrue(other.mask === mask)
+    }
+
     // MARK: Tuning a layer tree
 
     /// A material as AppKit builds it: a backdrop layer with three filters of its own and the
