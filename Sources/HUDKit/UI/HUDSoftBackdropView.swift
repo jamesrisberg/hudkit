@@ -54,7 +54,7 @@ public final class HUDSoftBackdropView: NSView {
         didSet { if field !== oldValue { fieldChanged() } }
     }
 
-    /// The blur's radius: the family's, 25, unless set.
+    /// The blur's radius: the family's, 25, unless set. Below 0 is taken as 0.
     public var blurRadius = CGFloat(HUDWindowBlur.radius) {
         didSet { if blurRadius != oldValue { radiusChanged() } }
     }
@@ -137,9 +137,12 @@ public final class HUDSoftBackdropView: NSView {
 
     // MARK: Path
 
+    /// The radius the blur is made with: `blurRadius`, not below 0.
+    private var radiusUsed: CGFloat { max(0, blurRadius) }
+
     private func makeFilter() -> NSObject? {
         guard case .success(let pieces) = pieces else { return nil }
-        return pieces.makeFilter(max(0, blurRadius))
+        return pieces.makeFilter(radiusUsed)
     }
 
     private func choosePath() -> (Path, String) {
@@ -153,9 +156,9 @@ public final class HUDSoftBackdropView: NSView {
         case .success:
             if let failure { return (.systemMaterial, failure) }
             guard filter != nil else {
-                return (.systemMaterial, "no Gaussian blur filter of radius \(Self.format(blurRadius)) could be made")
+                return (.systemMaterial, "no Gaussian blur filter of radius \(Self.format(radiusUsed)) could be made")
             }
-            return (.blur, "one Gaussian blur of radius \(Self.format(blurRadius)) on the material's backdrop layer")
+            return (.blur, "one Gaussian blur of radius \(Self.format(radiusUsed)) on the material's backdrop layer")
         }
     }
 

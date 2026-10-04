@@ -158,6 +158,9 @@ final class HUDSoftBackdropViewTests: XCTestCase {
         view.blurRadius = 12.5
         XCTAssertEqual(view.path, .blur)
         XCTAssertTrue(view.pathReason.contains("radius 12.5"), view.pathReason)
+        view.blurRadius = -3
+        XCTAssertEqual(view.path, .blur)
+        XCTAssertTrue(view.pathReason.contains("radius 0 "), "the radius used, not the one asked for: \(view.pathReason)")
     }
 
     // MARK: The field
