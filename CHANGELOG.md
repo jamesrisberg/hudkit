@@ -51,6 +51,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   seconds, so leaving full screen by any route brings the panel back within about two seconds.
 - A dock strip's snapshot (`snapshot()`, `writeSnapshot(to:)`) draws the hairline border as the
   strip shows it on screen: only on the slab, never outside its edge.
+- Scoring wake word audio faster than real time (the wake evaluation) no longer piles up
+  memory: each model call frees its buffers as it returns.
 
 ### Added
 - Each wake hands the app the last 2.5 seconds of audio the wake word heard, with how many

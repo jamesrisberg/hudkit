@@ -156,11 +156,6 @@ enum WakeEvaluation {
         while start + frameSamples <= samples.count {
             scores.append(try await engine.score(Array(samples[start..<(start + frameSamples)])))
             start += frameSamples
-            // Scored flat out, memory climbs about 25 KB a frame (3.8 GB for a two-hour file) and
-            // stays up until the engine's thread idles, as the live listener's does between
-            // 80 ms frames. A short sleep every few frames keeps it flat (0.6 GB). The buffers
-            // are probably ONNX Runtime's per-call autoreleased tensors; that is not traced.
-            if scores.count % 4 == 0 { try await Task.sleep(for: .milliseconds(1)) }
         }
         return scores
     }
@@ -178,9 +173,15 @@ enum WakeEvaluation {
             let end = min(offset + 4_096, samples.count)
             if let hit = try await detector.detect(Array(samples[offset..<end])) { return hit }
             offset = end
-            try await Task.sleep(for: .milliseconds(1))  // see `score`
         }
         return nil
+    }
+
+    /// The most memory the process has held, in megabytes.
+    static func peakResidentMegabytes() -> Double {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        return Double(usage.ru_maxrss) / 1_048_576  // bytes on macOS
     }
 
     // MARK: Inputs
@@ -367,6 +368,8 @@ enum WakeEvaluation {
 
         line("Cross-check against InProcessWakeDetector at \(String(format: "%.2f", ownerThreshold)) (first detection)")
         for entry in crossChecks { line("  \(entry)") }
+        line()
+        line(String(format: "Peak resident memory of the test process: %.0f MB.", peakResidentMegabytes()))
         return out.joined(separator: "\n")
     }
 }

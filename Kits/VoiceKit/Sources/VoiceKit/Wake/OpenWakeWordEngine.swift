@@ -127,15 +127,20 @@ public actor OpenWakeWordEngine: WakeScoringEngine {
         }
     }
 
+    /// ONNX Runtime's Objective-C API hands back autoreleased tensors and data. The pool frees them
+    /// as each call returns: frames scored back to back (an evaluation) would otherwise keep every
+    /// one until the thread next idles, about 30 KB a frame.
     private func run(_ model: Model, _ values: [Float], shape: [Int]) throws -> [Float] {
-        let data = values.withUnsafeBufferPointer { NSMutableData(bytes: $0.baseAddress, length: $0.count * 4) }
-        let tensor = try ORTValue(
-            tensorData: data, elementType: .float, shape: shape.map { NSNumber(value: $0) })
-        let outputs = try model.session.run(
-            withInputs: [model.input: tensor], outputNames: [model.output], runOptions: nil)
-        guard let result = outputs[model.output] else { throw Failure.badOutput(model.output) }
-        let bytes = try result.tensorData() as Data
-        return bytes.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        try autoreleasepool {
+            let data = values.withUnsafeBufferPointer { NSMutableData(bytes: $0.baseAddress, length: $0.count * 4) }
+            let tensor = try ORTValue(
+                tensorData: data, elementType: .float, shape: shape.map { NSNumber(value: $0) })
+            let outputs = try model.session.run(
+                withInputs: [model.input: tensor], outputNames: [model.output], runOptions: nil)
+            guard let result = outputs[model.output] else { throw Failure.badOutput(model.output) }
+            let bytes = try result.tensorData() as Data
+            return bytes.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+        }
     }
 }
 

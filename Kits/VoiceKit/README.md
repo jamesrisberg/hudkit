@@ -69,7 +69,9 @@ restarts the count. A spoken wake phrase holds for several frames, so two frames
 80 ms later than one and ignore a sound that reaches the threshold for a single frame.
 Samples outside -1...1 are clipped; non-finite samples are an error.
 `OpenWakeWordEngine` is openWakeWord 0.6.0's streaming pipeline (melspectrogram, speech
-embedding, keyword classifier) on ONNX Runtime, one thread.
+embedding, keyword classifier) on ONNX Runtime, one thread. Each model call runs in its own
+autorelease pool, so scoring faster than real time (an evaluation) holds no more memory than
+listening does.
 
 ```swift
 let model = WakeModels.heyJarvis
