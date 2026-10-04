@@ -163,7 +163,12 @@ struct WakeEvaluationTests {
                         let result = await WakeEvaluation.evaluate(
                             files[index], padSeconds: configuration.padSeconds, with: engine)
                         results.mutate { $0[index] = result }
-                        if (index + 1) % 50 == 0 { print("wake evaluation: file \(index + 1) of \(files.count) started") }
+                        if (index + 1) % 50 == 0 {
+                            print("wake evaluation: file \(index + 1) of \(files.count) started")
+                            // Redirected to a file, standard output is block-buffered and the line would
+                            // appear only when the run ends.
+                            fflush(stdout)
+                        }
                     }
                 }
             }
@@ -174,6 +179,7 @@ struct WakeEvaluationTests {
             label: configuration.label, results: finished, padSeconds: configuration.padSeconds,
             wallSeconds: Date().timeIntervalSince(started))
         print(report)
+        fflush(stdout)
         #expect(finished.contains { $0.failure == nil }, "no file could be scored")
         let disagreeing = finished.filter { $0.failure == nil && $0.agreement == .disagrees }.map(\.name)
         #expect(disagreeing.isEmpty, "InProcessWakeDetector and the replay disagree on the first wake: \(disagreeing)")
