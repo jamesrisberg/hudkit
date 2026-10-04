@@ -31,14 +31,12 @@ public struct HUDDockStyle: Equatable, Sendable {
     public var pressedAlpha: CGFloat
     /// Corner radius of the drop-target and highlight wash behind an icon.
     public var highlightRadius: CGFloat
-    /// Backdrop before macOS 26 (on 26 it is Liquid Glass).
-    public var fallbackMaterial: NSVisualEffectView.Material
 
     public init(itemSize: CGFloat = 44, paddingRatio: CGFloat = 0.23, spacingRatio: CGFloat = 0.14,
                 cornerRadius: CGFloat = 18, borderWidth: CGFloat = 1, borderAlphaDark: CGFloat = 0.18,
                 borderAlphaLight: CGFloat = 0.12, magnification: CGFloat = 1.15, magnifyDuration: TimeInterval = 0.12,
                 indicatorSize: CGFloat = 4, dividerAlpha: CGFloat = 0.25, pressedAlpha: CGFloat = 0.6,
-                highlightRadius: CGFloat = 10, fallbackMaterial: NSVisualEffectView.Material = .popover) {
+                highlightRadius: CGFloat = 10) {
         self.itemSize = itemSize
         self.paddingRatio = paddingRatio
         self.spacingRatio = spacingRatio
@@ -52,7 +50,6 @@ public struct HUDDockStyle: Equatable, Sendable {
         self.dividerAlpha = dividerAlpha
         self.pressedAlpha = pressedAlpha
         self.highlightRadius = highlightRadius
-        self.fallbackMaterial = fallbackMaterial
     }
 
     /// The MacHUD tool dock at its default 44 pt icons: the definition of the look.

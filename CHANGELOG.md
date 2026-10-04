@@ -18,13 +18,19 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   inside a screen-sized dimming overlay should use `material: .visualEffect`. A `maskImage` (a
   ring) shapes the blur and tint rather than switching to the classic blur. The default
   material is the new `HUDGlassView.Material.windowBlur`.
+- The dock strip (`HUDDockStripView`, the MacHUD tool dock) is on the same backdrop, the tint
+  drawn in the strip's outline, so a straight strip and a corner L are each one slab. Its
+  hairline border is drawn just inside the slab, the same width all round, including along an
+  L's inner sides.
 
 ### Removed
-- `HUDGlassView.Material.automatic` and `HUDGlassView.usesLiquidGlass`.
+- `HUDGlassView.Material.automatic`, `HUDGlassView.usesLiquidGlass`,
+  `HUDDockStripView.usesLiquidGlass` and `HUDDockStyle.fallbackMaterial`.
 
 ### Fixed
-- Panels, widgets and dock labels are already blurred when a desktop switch lands, instead of
-  showing opaque for a moment first.
+- The tool dock no longer shows white splotches while you switch desktops.
+- Panels, widgets, dock labels and the tool dock are already blurred when a desktop switch
+  lands, instead of showing opaque for a moment first.
 - HUD windows that stay on screen for a long time (the voice orb, the tool dock, parking orbs,
   widgets) no longer go missing from a desktop. After a desktop switch, sleep and wake, or a
   display change, HUDKit checks each one and puts back any the system dropped from the desktop

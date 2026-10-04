@@ -223,10 +223,11 @@ Strips snap to eight `HUDDockPosition`s: the middle of each edge (one row/column
 Sibling strips publish their frames with `HUDDockRegistry.publish(appID:position:frames:)`,
 `watch` the file, and place themselves with `HUDDockLayout.avoiding(frame:others:along:in:)`.
 A strip's chrome is `HUDDockStripView` (SwiftUI: `HUDDockStrip`), the MacHUD tool dock's own
-view: `HUDDockStyle.standard` holds its measurements (44 pt icons, 64 pt thick, 18 pt corners)
-and `HUDDockStyle.placement(groups:position:insets:in:)` lays out an edge run or an L. The view
-reports clicks, menus, file drops and where a background drag snaps to through
-`HUDDockStripDelegate`, and `writeSnapshot(to:)` draws it without Screen Recording.
+view, on the same backdrop as `HUDGlassView` with the tint drawn in the strip's outline (one
+slab, straight or an L): `HUDDockStyle.standard` holds its measurements (44 pt icons, 64 pt
+thick, 18 pt corners) and `HUDDockStyle.placement(groups:position:insets:in:)` lays out an edge
+run or an L. The view reports clicks, menus, file drops and where a background drag snaps to
+through `HUDDockStripDelegate`, and `writeSnapshot(to:)` draws it without Screen Recording.
 
 ## Settings
 

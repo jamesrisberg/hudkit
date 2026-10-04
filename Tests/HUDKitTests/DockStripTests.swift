@@ -24,7 +24,6 @@ final class DockStripTests: XCTestCase {
         XCTAssertEqual(s.dividerAlpha, 0.25)
         XCTAssertEqual(s.pressedAlpha, 0.6)
         XCTAssertEqual(s.highlightRadius, 10)
-        XCTAssertEqual(s.fallbackMaterial, .popover)
         // Proportions follow the icon size.
         let small = s.withItemSize(30)
         XCTAssertEqual(small.padding, 7)
