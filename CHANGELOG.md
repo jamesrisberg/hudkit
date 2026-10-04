@@ -22,6 +22,11 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   drawn in the strip's outline, so a straight strip and a corner L are each one slab. Its
   hairline border is drawn just inside the slab, the same width all round, including along an
   L's inner sides.
+- The wake word no longer wakes on a single stray sound: the phrase has to hold for two 80 ms
+  frames in a row (the new voice setting `wakeFrames`, 1 to 4), so a real "Hey Jarvis" wakes
+  about 80 ms later than before. On 14.7 hours of recorded dictation this halves the false
+  wakes (4 to 2). For apps built on VoiceKit: `WakeDetector.arm(threshold:frames:)` replaces
+  `arm(threshold:)`, and `WakeListener` needs `frames`.
 
 ### Removed
 - `HUDGlassView.Material.automatic`, `HUDGlassView.usesLiquidGlass`,
@@ -46,8 +51,23 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   seconds, so leaving full screen by any route brings the panel back within about two seconds.
 - A dock strip's snapshot (`snapshot()`, `writeSnapshot(to:)`) draws the hairline border as the
   strip shows it on screen: only on the slab, never outside its edge.
+- Scoring wake word audio faster than real time (the wake evaluation) no longer piles up
+  memory: each model call frees its buffers as it returns.
 
 ### Added
+- Each wake hands the app the last 2.5 seconds of audio the wake word heard, with how many
+  frames fired and their best score (`WakeDetection.audio`, `frames`, `peak`), so the app can
+  transcribe it and confirm the phrase was really said before acting on it. The audio is
+  handed over once and not kept. On a false wake it is whatever was said in the room, so the
+  app transcribes it on the Mac and never keeps, logs or sends it; printing or logging a wake
+  shows only how much audio it holds.
+- An app that refuses a wake (the phrase was not in what it heard) can ask the wake word to
+  ignore what it hears for a moment when it listens again (`quietFor:` on `WakeListener.rearm`
+  and `start`), so the rest of the refused sound is not scored again. Nothing is ignored unless
+  the app asks.
+- `TriggerPhrase.transcript(_:contains:)`: whether a transcript contains a phrase, its words
+  together and in order as whole words, ignoring case, accents, punctuation and the words
+  around it.
 - Diagnostics in the unified log (`log show --predicate 'subsystem == "xyz.machud.hudkit"'`):
   category `presence` names every HUD window HUDKit had to put back and what was wrong with it,
   and a window the system keeps reporting somewhere other than where it belongs (logged only,

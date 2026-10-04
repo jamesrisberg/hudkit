@@ -31,19 +31,47 @@ Dependencies: [onnxruntime-swift-package-manager](https://github.com/microsoft/o
 ## Wake word
 
 `WakeListener` connects a `WakeAudioSource` (the host's microphone: 16 kHz mono chunks,
-nominally in -1...1, at most one second each, on the main actor) to a `WakeDetector`. It arms
+nominally in -1...1, at most one second each, on the main actor) to a `WakeDetector`, with a
+threshold and a frame count (`frames` has no default: pass `VoiceSettings.wakeFrames`). It arms
 the detector, starts the source, feeds chunks one at a time and calls `onWake` once; it then
-stays quiet, with the source still running, until `rearm()`. `stop()` stops the source, also
-when it comes during a slow `source.start()`. A detector error, a non-finite sample, a source
-that fails to start, or more than `WakeListener.maximumBacklogSamples` (half a second) of
-audio waiting for the detector moves it to `.failed` with the source stopped; the host calls
-`start()` again to resume.
+stays quiet, with the source still running, until `rearm()` (which can also change the
+threshold or the frame count). `stop()` stops the source, also when it comes during a slow
+`source.start()`. A detector error, a non-finite sample, a source that fails to start, or more
+than `WakeListener.maximumBacklogSamples` (half a second) of audio waiting for the detector
+moves it to `.failed` with the source stopped; the host calls `start()` again to resume.
+
+A `WakeDetection` carries the score of the frame that fired and the run it completed: `frames`
+(always the count the detector was armed with) and its `peak` score. From `WakeListener` it
+also carries `audio`: the last `WakeListener.heardSamples` (2.5 s) of the audio the listener fed
+the detector since it was armed, up to the end of the chunk in which the wake came (the rest of
+that chunk and samples that never made a whole frame are included). The model also fires on
+phrases that sound alike ("Hey Javier"), so a host transcribes `audio` and checks it with
+`TriggerPhrase.transcript(_:contains:)` before acting.
+
+What a host receives and owes: `audio` is up to 2.5 s of whatever the microphone picked up
+before the wake, handed over once, on the main actor. On a false wake it is speech in the room
+that nobody meant for the assistant. The host transcribes it on the device, never saves,
+journals, logs or sends it, and lets go of it as soon as the phrase is confirmed or refused.
+The listener keeps none of it after the hand-over, and stopping, failing or re-arming drops
+what it heard. A `WakeDetection` prints, debug-prints and reflects only the audio's sample
+count, so logging one does not write the audio out.
+
+A host that listens again after a wake it refused or could not confirm can ask for a quiet
+period: `rearm(quietFor:)` and `start(quietFor:)` drop the audio that arrives in that many
+seconds from when listening resumes, neither scored nor kept, so the rest of the refused sound
+is not scored again. The default, 0, drops nothing; a sound-alike that keeps playing past the
+quiet period can wake it again. The listener's clock is injectable (`now:`).
 
 `InProcessWakeDetector` scores 80 ms frames (1280 samples) with a `WakeScoringEngine`: one
-detection per arm, a threshold in 0.05...0.95, and any error disarms it. Samples outside
--1...1 are clipped; non-finite samples are an error.
+detection per arm, a threshold in 0.05...0.95, and any error disarms it. It wakes when
+`frames` (1...4) consecutive frames score at or above the threshold; a frame below it
+restarts the count. A spoken wake phrase holds for several frames, so two frames wake on it
+80 ms later than one and ignore a sound that reaches the threshold for a single frame.
+Samples outside -1...1 are clipped; non-finite samples are an error.
 `OpenWakeWordEngine` is openWakeWord 0.6.0's streaming pipeline (melspectrogram, speech
-embedding, keyword classifier) on ONNX Runtime, one thread.
+embedding, keyword classifier) on ONNX Runtime, one thread. Each model call runs in its own
+autorelease pool, so scoring faster than real time (an evaluation) holds no more memory than
+listening does.
 
 ```swift
 let model = WakeModels.heyJarvis
@@ -52,9 +80,10 @@ guard store.isReady else { return }                // store.download() when the 
 let engine = try OpenWakeWordEngine(model: model, directory: store.directory)
 let listener = WakeListener(
     detector: InProcessWakeDetector(engine: engine, phrase: model.phrase, model: model.id),
-    source: microphone, threshold: settings.wakeThreshold)
+    source: microphone, threshold: settings.wakeThreshold, frames: settings.wakeFrames)
 listener.onWake = { detection in
-    if registry.action(forPhrase: detection.phrase) == .agentTurn { startAgentTurn() }
+    guard registry.action(forPhrase: detection.phrase) == .agentTurn else { return }
+    confirm(detection.audio, phrase: detection.phrase)  // transcribe, then TriggerPhrase.transcript(_:contains:)
 }
 await listener.start()
 ```
@@ -72,6 +101,14 @@ identifier the host resolves, such as a `machud` command). It does not know how 
 heard: `action(forPhrase:)` takes the phrase a wake model reports, `match(transcript:)` finds
 the phrase a transcript opens with (whole words, longest first) and returns the words after
 it. Phrases compare normalized: case, accents and punctuation are ignored.
+`TriggerPhrase.transcript(_:contains:)` says whether one phrase was spoken anywhere in a
+transcript: the phrase's words next to each other and in order, as whole words, with any words
+before and after them ("okay, hey Jarvis, what time is it" contains "Hey Jarvis"; "hey Javier",
+"Jarvis", "hey there Jarvis" and "they Jarvis" do not). Punctuation counts as a space here, so
+it is ignored between and around the words, a sentence end included ("Hey. Jarvis",
+"Hey-Jarvis"), since transcribers punctuate a pause. Words run together or split apart are not
+the phrase ("heyjarvis", "hey jar vis"). Each word compares as `normalize` compares it. Unlike
+`match(transcript:)` it looks anywhere, not only at the start, and returns no remainder.
 `TriggerPhraseRegistry.standard` maps "Hey Computer" to `.agentTurn`. The registry encodes as a
 plain JSON list of `{phrase, action}`.
 
@@ -165,6 +202,7 @@ process stops at the first synthesis (MLX reports "Failed to load the default me
 | `wakeWordEnabled` | Bool | false | Listen for the wake phrase |
 | `wakePhrase` | String | "Hey Computer" | The phrase to listen for |
 | `wakeThreshold` | Double | 0.5 | 0.05...0.95; higher wakes less often |
+| `wakeFrames` | Int | 2 | 1...4 consecutive 80 ms frames at or above the threshold; more wakes less often on a passing sound |
 | `replyVoice` | `kokoro` \| `system` \| `grok` | `kokoro` | Preferred reply voice |
 | `speakReplies` | Bool | false | Speak replies; otherwise replies are text only |
 | `kokoro.voice` | String | `af_heart` | A `KokoroModels.voices` id |
@@ -200,12 +238,13 @@ cd Kits/VoiceKit && swift build && swift test
 ```
 
 The tests use fakes for the microphone, the models, the network and
-audio playback: nothing opens the microphone, reaches the network or makes a sound. Two tests
-run the real models when pointed at installed files and are skipped otherwise:
+audio playback: nothing opens the microphone, reaches the network or makes a sound. Three
+tests run the real models when pointed at installed files and are skipped otherwise:
 
 | Variable | Folder | Test |
 |---|---|---|
-| `VOICEKIT_WAKE_MODELS` | the Hey Jarvis files | openWakeWord scores match the Python reference on a fixture |
+| `VOICEKIT_WAKE_MODELS` | the Hey Jarvis files | openWakeWord scores match the Python reference on a fixture, and the detector wakes on it at the settings default |
+| `VOICEKIT_WAKE_MODELS` and `VOICEKIT_WAKE_EVAL_AUDIO` | the Hey Jarvis files; a folder of .wav files or a text file listing them | `WakeEvaluationTests` prints how often each threshold and frame count would wake on that audio, and the real detector's wakes at the settings default (an instrument: it asserts no rates; see its doc comment for the other variables) |
 | `VOICEKIT_KOKORO_MODELS` | an installed Kokoro folder | Kokoro synthesizes finite, audible audio offline (nothing is played) |
 
 The Kokoro test needs MLX's Metal library, which `swift test` does not place where MLX looks,

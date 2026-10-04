@@ -6,7 +6,9 @@ import Foundation
 /// The loading, counting and reporting half of the opt-in wake detector evaluation
 /// (`WakeEvaluationTests`). Scores come from the real engine one 1280-sample frame at a time,
 /// exactly as `InProcessWakeDetector` feeds it; every threshold and consecutive-frame rule is
-/// then replayed over the same scores, so one pass over the audio answers all of them.
+/// then replayed over the same scores, so one pass over the audio answers all of them. A second
+/// pass runs `InProcessWakeDetector` itself at the owner's threshold and the settings default
+/// for frames, and its wakes are compared with the replay's.
 enum WakeEvaluation {
     static let frameSamples = InProcessWakeDetector.frameSamples
     static let sampleRate = 16_000.0
@@ -18,6 +20,8 @@ enum WakeEvaluation {
     static let runLengths = [1, 2, 3, 4]
     /// The threshold per-file peaks and run detail are reported at: the owner's setting.
     static let ownerThreshold = 0.53
+    /// The consecutive frames the real detector is run with: the settings default.
+    static let detectorFrames = VoiceSettings().wakeFrames
 
     // MARK: Counting
 
@@ -156,31 +160,81 @@ enum WakeEvaluation {
         while start + frameSamples <= samples.count {
             scores.append(try await engine.score(Array(samples[start..<(start + frameSamples)])))
             start += frameSamples
-            // Scored flat out, memory climbs about 25 KB a frame (3.8 GB for a two-hour file) and
-            // stays up until the engine's thread idles, as the live listener's does between
-            // 80 ms frames. A short sleep every few frames keeps it flat (0.6 GB). The buffers
-            // are probably ONNX Runtime's per-call autoreleased tensors; that is not traced.
-            if scores.count % 4 == 0 { try await Task.sleep(for: .milliseconds(1)) }
         }
         return scores
     }
 
-    /// The first detection `InProcessWakeDetector` itself reports for the audio, fed in chunks
-    /// that are not a multiple of a frame, as a microphone source would.
+    /// Every wake `InProcessWakeDetector` itself reports for the audio, fed in chunks that are not
+    /// a multiple of a frame. After a wake the next `skipFrames` frames are skipped, as the replay
+    /// skips them, and the detector is armed again. Arming resets the engine (the live listener's
+    /// re-arm does too), so the scores after a wake can differ from the replay's, which scores the
+    /// file in one go.
     @MainActor
-    static func firstDetection(
-        _ samples: [Float], with engine: WakeScoringEngine, threshold: Double
-    ) async throws -> WakeDetection? {
-        let detector = InProcessWakeDetector(engine: engine, phrase: "Hey Jarvis", model: "evaluation")
-        _ = try await detector.arm(threshold: threshold)
+    static func detections(
+        _ samples: [Float], with engine: WakeScoringEngine, threshold: Double, frames: Int
+    ) async throws -> [Event] {
+        let counter = FrameCounter(engine)
+        let detector = InProcessWakeDetector(engine: counter, phrase: "Hey Jarvis", model: "evaluation")
+        _ = try await detector.arm(threshold: threshold, frames: frames)
+        var events: [Event] = []
+        var armedAt = 0
         var offset = 0
         while offset < samples.count {
             let end = min(offset + 4_096, samples.count)
-            if let hit = try await detector.detect(Array(samples[offset..<end])) { return hit }
-            offset = end
-            try await Task.sleep(for: .milliseconds(1))  // see `score`
+            guard let hit = try await detector.detect(Array(samples[offset..<end])) else {
+                offset = end
+                continue
+            }
+            let frame = armedAt + (await counter.frames) - 1
+            events.append(Event(frame: frame, score: Float(hit.score)))
+            armedAt = frame + 1 + skipFrames
+            offset = armedAt * frameSamples
+            _ = try await detector.arm(threshold: threshold, frames: frames)
         }
-        return nil
+        return events
+    }
+
+    /// An engine that counts the frames scored since its last reset, so a detection can be placed
+    /// in the file.
+    private actor FrameCounter: WakeScoringEngine {
+        private let engine: WakeScoringEngine
+        private(set) var frames = 0
+
+        init(_ engine: WakeScoringEngine) { self.engine = engine }
+
+        func reset() async throws {
+            frames = 0
+            try await engine.reset()
+        }
+
+        func score(_ frame: [Float]) async throws -> Float {
+            frames += 1
+            return try await engine.score(frame)
+        }
+    }
+
+    /// One file: its scores and the real detector's wakes. A file that cannot be read, or holds
+    /// less than one whole frame, is a failure, not a file without a wake.
+    static func evaluate(_ url: URL, padSeconds: Double, with engine: WakeScoringEngine) async -> FileResult {
+        let name = url.lastPathComponent
+        do {
+            let samples = try samples(from: url, padSeconds: padSeconds)
+            let scores = try await score(samples, with: engine)
+            guard !scores.isEmpty else {
+                return FileResult(name: name, scores: [], detected: [], failure: "shorter than one 80 ms frame")
+            }
+            let detected = try await detections(samples, with: engine, threshold: ownerThreshold, frames: detectorFrames)
+            return FileResult(name: name, scores: scores, detected: detected, failure: nil)
+        } catch {
+            return FileResult(name: name, scores: [], detected: [], failure: "\(error)")
+        }
+    }
+
+    /// The most memory the process has held, in megabytes.
+    static func peakResidentMegabytes() -> Double {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return 0 }
+        return Double(usage.ru_maxrss) / 1_048_576  // bytes on macOS
     }
 
     // MARK: Inputs
@@ -250,15 +304,28 @@ enum WakeEvaluation {
     struct FileResult: Sendable {
         let name: String
         let scores: [Float]
+        /// The real detector's wakes (`detections`).
+        let detected: [Event]
         let failure: String?
         var seconds: Double { Double(scores.count) * WakeEvaluation.frameSeconds }
         var peak: Float { scores.max() ?? 0 }
+        var replayed: [Event] { events(in: scores, threshold: ownerThreshold, run: detectorFrames) }
+
+        enum Agreement: String { case agrees, differsAfterARearm = "differs after a re-arm", disagrees = "DISAGREES" }
+
+        /// Whether the real detector's wakes are the replay's. Only those after its first can
+        /// differ, from the engine reset that comes with arming again.
+        var agreement: Agreement {
+            let replayed = replayed
+            if detected == replayed { return .agrees }
+            if let first = detected.first, first == replayed.first { return .differsAfterARearm }
+            return .disagrees
+        }
     }
 
     /// The tables and the per-file listing. Only file names, durations and scores appear.
     static func report(
-        label: String, results: [FileResult], padSeconds: Double, wallSeconds: Double,
-        crossChecks: [String]
+        label: String, results: [FileResult], padSeconds: Double, wallSeconds: Double
     ) -> String {
         let scored = results.filter { $0.failure == nil }
         let failed = results.filter { $0.failure != nil }
@@ -365,8 +432,29 @@ enum WakeEvaluation {
         if listed == 0 { line("  none") }
         line()
 
-        line("Cross-check against InProcessWakeDetector at \(String(format: "%.2f", ownerThreshold)) (first detection)")
-        for entry in crossChecks { line("  \(entry)") }
+        let rule = String(format: "%.2f with %d consecutive frames", ownerThreshold, detectorFrames)
+        let detectedTotal = scored.reduce(0) { $0 + $1.detected.count }
+        let replayedTotal = scored.reduce(0) { $0 + $1.replayed.count }
+        line("InProcessWakeDetector at \(rule) (the settings default), armed again 2 s after each wake")
+        line(
+            "Wake events: \(detectedTotal) (\(perHour(detectedTotal))/h) in \(scored.filter { !$0.detected.isEmpty }.count) "
+                + "of \(scored.count) files; the replay of the same rule: \(replayedTotal) (\(perHour(replayedTotal))/h).")
+        let agreements = scored.map(\.agreement)
+        line(
+            "Files where the detector and the replay agree: \(agreements.filter { $0 == .agrees }.count); "
+                + "differ only after a re-arm: \(agreements.filter { $0 == .differsAfterARearm }.count); "
+                + "disagree: \(agreements.filter { $0 == .disagrees }.count).")
+        func listing(_ events: [Event]) -> String {
+            events.isEmpty
+                ? "none" : events.map { String(format: "%.2f s %.4f", $0.seconds, $0.score) }.joined(separator: ", ")
+        }
+        for result in scored where !result.detected.isEmpty || !result.replayed.isEmpty {
+            line(
+                "  \(result.name): \(result.agreement.rawValue) (detector \(listing(result.detected)); "
+                    + "replay \(listing(result.replayed)))")
+        }
+        line()
+        line(String(format: "Peak resident memory of the test process: %.0f MB.", peakResidentMegabytes()))
         return out.joined(separator: "\n")
     }
 }

@@ -7,6 +7,7 @@ import Foundation
 public struct VoiceSettings: Codable, Equatable, Sendable {
     public static let defaultWakePhrase = "Hey Computer"
     public static let wakeThresholdRange = InProcessWakeDetector.thresholdRange
+    public static let wakeFramesRange = InProcessWakeDetector.framesRange
     public static let speedRange = 0.5...2.0
 
     public struct Kokoro: Codable, Equatable, Sendable {
@@ -84,6 +85,9 @@ public struct VoiceSettings: Codable, Equatable, Sendable {
     public var wakePhrase: String
     /// Detection threshold, 0.05...0.95; higher wakes less often.
     public var wakeThreshold: Double
+    /// Consecutive 80 ms frames that must reach the threshold, 1...4; more wakes less often on
+    /// a passing sound and a frame later on the phrase.
+    public var wakeFrames: Int
     /// The preferred reply voice; see `effectiveReplyVoice` for the fallback.
     public var replyVoice: SpeechVoiceKind
     /// Replies are text only unless this is on.
@@ -94,12 +98,13 @@ public struct VoiceSettings: Codable, Equatable, Sendable {
 
     public init(
         wakeWordEnabled: Bool = false, wakePhrase: String = VoiceSettings.defaultWakePhrase,
-        wakeThreshold: Double = 0.5, replyVoice: SpeechVoiceKind = .kokoro, speakReplies: Bool = false,
-        kokoro: Kokoro = .init(), system: System = .init(), grok: Grok = .init()
+        wakeThreshold: Double = 0.5, wakeFrames: Int = 2, replyVoice: SpeechVoiceKind = .kokoro,
+        speakReplies: Bool = false, kokoro: Kokoro = .init(), system: System = .init(), grok: Grok = .init()
     ) {
         self.wakeWordEnabled = wakeWordEnabled
         self.wakePhrase = wakePhrase
         self.wakeThreshold = wakeThreshold
+        self.wakeFrames = wakeFrames
         self.replyVoice = replyVoice
         self.speakReplies = speakReplies
         self.kokoro = kokoro
@@ -117,6 +122,7 @@ public struct VoiceSettings: Codable, Equatable, Sendable {
             wakeWordEnabled: value(.wakeWordEnabled, defaults.wakeWordEnabled),
             wakePhrase: value(.wakePhrase, defaults.wakePhrase),
             wakeThreshold: value(.wakeThreshold, defaults.wakeThreshold),
+            wakeFrames: value(.wakeFrames, defaults.wakeFrames),
             replyVoice: value(.replyVoice, defaults.replyVoice),
             speakReplies: value(.speakReplies, defaults.speakReplies),
             kokoro: value(.kokoro, defaults.kokoro),
@@ -131,6 +137,7 @@ public struct VoiceSettings: Codable, Equatable, Sendable {
         let phrase = wakePhrase.trimmingCharacters(in: .whitespacesAndNewlines)
         copy.wakePhrase = TriggerPhrase.normalize(phrase).isEmpty ? Self.defaultWakePhrase : phrase
         copy.wakeThreshold = Self.clamp(wakeThreshold, to: Self.wakeThresholdRange, default: 0.5)
+        copy.wakeFrames = min(Self.wakeFramesRange.upperBound, max(Self.wakeFramesRange.lowerBound, wakeFrames))
         copy.kokoro = kokoro.sanitized()
         copy.system = system.sanitized()
         copy.grok = grok.sanitized()

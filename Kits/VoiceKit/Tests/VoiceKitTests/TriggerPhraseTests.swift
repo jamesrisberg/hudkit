@@ -45,6 +45,45 @@ struct TriggerPhraseTests {
         #expect(registry.match(transcript: "") == nil)
     }
 
+    @Test func aTranscriptContainsThePhraseOnlyAsItsWordsTogetherAndInOrder() {
+        let phrase = "Hey Jarvis"
+        let heard = [
+            "Hey Jarvis", "hey jarvis", "Hey, Jarvis!", "  HEY \n  JARVIS. ", "Héy Jarvís",
+            "Okay hey Jarvis, what time is it?", "hey jarvis what's the weather",
+            // Punctuation between the words, a sentence end included: transcribers punctuate pauses.
+            "Hey. Jarvis", "Hey! Jarvis?", "hey jarvis'", "hey — jarvis", "Hey-Jarvis", "hey…jarvis",
+            // Punctuation inside a word separates words too: the phrase is followed by "s".
+            "hey jarvis's friend",
+        ]
+        for transcript in heard {
+            #expect(TriggerPhrase.transcript(transcript, contains: phrase), "\(transcript)")
+        }
+        let notHeard = [
+            "hey javier", "Hey Travis", "hey harvey", "Jarvis", "hey", "Jarvis, hey", "hey there jarvis",
+            "they jarvis", "hey jarvisson", "hey jar", "", "—",
+            // Its words run together or split apart: not the phrase.
+            "heyjarvis", "okay, HeyJarvis.", "hey jar vis", "heyjar vis", "he yjarvis",
+        ]
+        for transcript in notHeard {
+            #expect(!TriggerPhrase.transcript(transcript, contains: phrase), "\(transcript)")
+        }
+        // A phrase with no words is in no transcript.
+        #expect(!TriggerPhrase.transcript("hey jarvis", contains: " !! "))
+    }
+
+    @Test func wordsRunTogetherOrSplitApartAreNotThePhrase() {
+        #expect(!TriggerPhrase.transcript("in its heyday", contains: "Hey Day"))
+        #expect(!TriggerPhrase.transcript("anyway", contains: "Any Way"))
+        #expect(!TriggerPhrase.transcript("any way you like", contains: "Anyway"))
+        #expect(!TriggerPhrase.transcript("in its hey day", contains: "Heyday"))
+        #expect(!TriggerPhrase.transcript("okayhey jarvis", contains: "Okay Hey Jarvis"))
+        #expect(!TriggerPhrase.transcript("okay heyjarvis", contains: "Okay Hey Jarvis"))
+        #expect(!TriggerPhrase.transcript("okayheyjarvis", contains: "Okay Hey Jarvis"))
+        #expect(TriggerPhrase.transcript("okay hey jarvis", contains: "Okay Hey Jarvis"))
+        #expect(TriggerPhrase.transcript("okay-hey-jarvis", contains: "Okay Hey Jarvis"))
+        #expect(TriggerPhrase.transcript("any way you like", contains: "Any-Way"))
+    }
+
     @Test func theRegistryRoundTripsAsAPlainList() throws {
         var registry = TriggerPhraseRegistry.standard
         registry.register("Next layout", action: "layout.next")

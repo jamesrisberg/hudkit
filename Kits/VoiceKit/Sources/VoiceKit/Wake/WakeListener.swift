@@ -15,6 +15,15 @@ public protocol WakeAudioSource: AnyObject {
 /// After a wake the listener stays quiet (the source keeps running) until `rearm()`, so the
 /// host can take the utterance that follows. On `.failed` the source is stopped; the host
 /// calls `start()` again to resume.
+///
+/// Each wake carries the last `heardSamples` (2.5 s) of the audio the listener fed the detector
+/// since it was armed, so the host can transcribe it and confirm the phrase. It is handed to
+/// `onWake` once and not kept; stopping, failing or re-arming drops it.
+///
+/// A host that listens again after a wake it refused or could not confirm can ask for a quiet
+/// period (`quietFor:` on `rearm` and `start`): audio that arrives in it is neither scored nor
+/// kept, so the rest of the refused sound is not scored again. Without one, nothing is dropped. A
+/// sound-alike that keeps playing past the quiet period can wake it again.
 @MainActor
 public final class WakeListener {
     public enum Failure: LocalizedError {
@@ -38,10 +47,17 @@ public final class WakeListener {
     /// Audio waiting for the detector beyond this (half a second) means it cannot keep up;
     /// listening fails rather than scoring stale audio with a gap the model cannot see.
     public static let maximumBacklogSamples = 8_000
+    /// At most this much audio (2.5 s at 16 kHz) is handed over with a wake.
+    public nonisolated static let heardSamples = 40_000
 
     private let detector: WakeDetector
     private let source: WakeAudioSource
+    private let now: @MainActor () -> TimeInterval
     private var threshold: Double
+    private var frames: Int
+    private var heard = SampleRing(capacity: WakeListener.heardSamples)
+    /// Audio that arrives before this (by `now`) is dropped: the quiet period a host asked for.
+    private var quietUntil = -TimeInterval.infinity
     private var backlog: [[Float]] = []
     private var backlogSamples = 0
     private var draining = false
@@ -50,21 +66,28 @@ public final class WakeListener {
     /// when none is left, so it never turns off the microphone a newer start opened.
     private var sourceStartsInFlight = 0
 
-    public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5) {
+    /// - Parameters:
+    ///   - threshold: the score a frame must reach (`VoiceSettings.wakeThreshold`).
+    ///   - frames: the consecutive frames at or above it that make a wake (`VoiceSettings.wakeFrames`).
+    ///   - now: seconds on a monotonic clock, for a quiet period.
+    public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5, frames: Int,
+                now: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.detector = detector
         self.source = source
         self.threshold = threshold
+        self.frames = frames
+        self.now = now
     }
 
-    /// Arms the detector, then starts the source.
-    public func start() async {
+    /// Arms the detector, then starts the source. `quietFor`: as for `rearm`.
+    public func start(quietFor: TimeInterval = 0) async {
         guard state == .idle || isFailed else { return }
         let token = UUID()
         generation = token
         state = .arming
         source.onSamples = { [weak self] samples in self?.receive(samples, token: token) }
         do {
-            info = try await detector.arm(threshold: threshold)
+            info = try await detector.arm(threshold: threshold, frames: frames)
             guard generation == token else { return }
             sourceStartsInFlight += 1
             defer { sourceStartsInFlight -= 1 }
@@ -79,27 +102,32 @@ public final class WakeListener {
                 if sourceStartsInFlight == 1, state != .listening, state != .woke { source.stop() }
                 return
             }
-            state = .listening
+            listen(quietFor: quietFor)
         } catch {
             guard generation == token else { return }
             fail(error)
         }
     }
 
-    /// Listens for the next wake after one was reported, optionally at a new threshold.
-    /// Ignored while arming, so overlapping calls arm once.
-    public func rearm(threshold: Double? = nil) async {
+    /// Listens for the next wake after one was reported, optionally with a new threshold or
+    /// frame count. Ignored while arming, so overlapping calls arm once.
+    ///
+    /// `quietFor` seconds of audio, counted from when listening resumes, are neither scored nor
+    /// kept: a host asks for this when it listens again after a wake it refused or could not
+    /// confirm. The default, 0 (or any value that is not a positive number), drops nothing.
+    public func rearm(threshold: Double? = nil, frames: Int? = nil, quietFor: TimeInterval = 0) async {
         guard state == .woke || state == .listening else { return }
         if let threshold { self.threshold = threshold }
+        if let frames { self.frames = frames }
         let token = UUID()
         generation = token
-        clearBacklog()
+        dropAudio()
         state = .arming
         source.onSamples = { [weak self] samples in self?.receive(samples, token: token) }
         do {
-            info = try await detector.arm(threshold: self.threshold)
+            info = try await detector.arm(threshold: self.threshold, frames: self.frames)
             guard generation == token else { return }
-            state = .listening
+            listen(quietFor: quietFor)
         } catch {
             guard generation == token else { return }
             fail(error)
@@ -110,7 +138,7 @@ public final class WakeListener {
         generation = UUID()
         source.onSamples = nil
         source.stop()
-        clearBacklog()
+        dropAudio()
         state = .idle
         await detector.disarm()
     }
@@ -120,22 +148,30 @@ public final class WakeListener {
         return false
     }
 
-    private func clearBacklog() {
+    private func listen(quietFor: TimeInterval) {
+        quietUntil = quietFor.isFinite && quietFor > 0 ? now() + quietFor : -.infinity
+        state = .listening
+    }
+
+    /// The audio waiting for the detector and the audio it heard both belong to the arm that is
+    /// ending.
+    private func dropAudio() {
         backlog.removeAll()
         backlogSamples = 0
         draining = false
+        heard.removeAll()
     }
 
     private func fail(_ error: Error) {
         generation = UUID()
         source.onSamples = nil
         source.stop()
-        clearBacklog()
+        dropAudio()
         state = .failed(error.localizedDescription)
     }
 
     private func receive(_ samples: [Float], token: UUID) {
-        guard generation == token, state == .listening else { return }
+        guard generation == token, state == .listening, now() >= quietUntil else { return }
         backlog.append(samples)
         backlogSamples += samples.count
         if backlogSamples > Self.maximumBacklogSamples {
@@ -152,12 +188,16 @@ public final class WakeListener {
         while generation == token, state == .listening, !backlog.isEmpty {
             let chunk = backlog.removeFirst()
             backlogSamples -= chunk.count
+            heard.append(chunk)
             do {
                 if let detection = try await detector.detect(chunk) {
                     guard generation == token else { return }
-                    clearBacklog()
+                    let wake = WakeDetection(
+                        score: detection.score, phrase: detection.phrase, frames: detection.frames,
+                        peak: detection.peak, audio: heard.samples)
+                    dropAudio()
                     state = .woke
-                    onWake?(detection)
+                    onWake?(wake)
                     return
                 }
             } catch {
@@ -167,5 +207,40 @@ public final class WakeListener {
             }
         }
         if generation == token { draining = false }
+    }
+}
+
+/// The most recent samples, up to `capacity`, oldest first.
+struct SampleRing {
+    let capacity: Int
+    private var storage: [Float] = []
+    /// Once `storage` is full: where the next sample goes, which is the oldest one.
+    private var next = 0
+
+    init(capacity: Int) {
+        precondition(capacity > 0)
+        self.capacity = capacity
+    }
+
+    var samples: [Float] {
+        storage.count < capacity ? storage : Array(storage[next...]) + storage[..<next]
+    }
+
+    mutating func append(_ samples: [Float]) {
+        var incoming = samples.suffix(capacity)
+        if storage.count < capacity {
+            let room = capacity - storage.count
+            storage.append(contentsOf: incoming.prefix(room))
+            incoming = incoming.dropFirst(room)
+        }
+        for sample in incoming {
+            storage[next] = sample
+            next = (next + 1) % capacity
+        }
+    }
+
+    mutating func removeAll() {
+        storage.removeAll()
+        next = 0
     }
 }
