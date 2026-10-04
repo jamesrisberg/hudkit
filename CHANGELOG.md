@@ -53,6 +53,12 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   strip shows it on screen: only on the slab, never outside its edge.
 
 ### Added
+- Each wake hands the app the last 2.5 seconds of audio the wake word heard, with how many
+  frames fired and their best score (`WakeDetection.audio`, `frames`, `peak`), so the app can
+  transcribe it and confirm the phrase was really said before acting on it. The audio is
+  handed over once and not kept. On a false wake it is whatever was said in the room, so the
+  app transcribes it on the Mac and never keeps, logs or sends it; printing or logging a wake
+  shows only how much audio it holds.
 - `TriggerPhrase.transcript(_:contains:)`: whether a transcript contains a phrase, its words
   together and in order as whole words, ignoring case, accents, punctuation and the words
   around it.

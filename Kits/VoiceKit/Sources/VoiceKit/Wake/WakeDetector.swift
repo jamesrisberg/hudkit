@@ -10,7 +10,7 @@ public struct WakeDetectorInfo: Equatable, Sendable {
     }
 }
 
-/// A wake: the run of frames that fired it.
+/// A wake: the run of frames that fired it and, from `WakeListener`, the audio that led to it.
 public struct WakeDetection: Equatable, Sendable {
     /// The score of the frame that completed the run.
     public let score: Double
@@ -20,13 +20,20 @@ public struct WakeDetection: Equatable, Sendable {
     public let frames: Int
     /// The highest score in the run.
     public let peak: Double
+    /// The 16 kHz mono audio `WakeListener` fed the detector since it was armed, at most
+    /// `WakeListener.heardSamples` (2.5 s), up to the end of the chunk in which the run completed:
+    /// the rest of that chunk and samples that never made a whole frame are included. A host
+    /// transcribes it on the device to confirm the phrase. On a false wake it is speech in the
+    /// room: never saved, logged or sent. Empty from a detector itself.
+    public let audio: [Float]
 
     /// `peak` defaults to `score`: a run of one frame.
-    public init(score: Double, phrase: String, frames: Int = 1, peak: Double? = nil) {
+    public init(score: Double, phrase: String, frames: Int = 1, peak: Double? = nil, audio: [Float] = []) {
         self.score = score
         self.phrase = phrase
         self.frames = frames
         self.peak = peak ?? score
+        self.audio = audio
     }
 }
 
@@ -161,5 +168,24 @@ public final class InProcessWakeDetector: WakeDetector {
         pending.removeAll(keepingCapacity: false)
         run = 0
         runPeak = 0
+    }
+}
+
+/// Printed, logged, debug-printed or reflected, a detection shows how much audio it holds, never
+/// the samples: on a false wake they are speech in the room.
+extension WakeDetection: CustomStringConvertible, CustomDebugStringConvertible, CustomReflectable {
+    public var description: String {
+        "WakeDetection(score: \(score), phrase: \"\(phrase)\", frames: \(frames), peak: \(peak), audio: \(audio.count) samples)"
+    }
+
+    public var debugDescription: String { description }
+
+    public var customMirror: Mirror {
+        Mirror(
+            self,
+            children: [
+                "score": score, "phrase": phrase, "frames": frames, "peak": peak, "audio": "\(audio.count) samples",
+            ],
+            displayStyle: .struct)
     }
 }

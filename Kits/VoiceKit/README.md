@@ -41,7 +41,20 @@ than `WakeListener.maximumBacklogSamples` (half a second) of audio waiting for t
 moves it to `.failed` with the source stopped; the host calls `start()` again to resume.
 
 A `WakeDetection` carries the score of the frame that fired and the run it completed: `frames`
-(always the count the detector was armed with) and its `peak` score.
+(always the count the detector was armed with) and its `peak` score. From `WakeListener` it
+also carries `audio`: the last `WakeListener.heardSamples` (2.5 s) of the audio the listener fed
+the detector since it was armed, up to the end of the chunk in which the wake came (the rest of
+that chunk and samples that never made a whole frame are included). The model also fires on
+phrases that sound alike ("Hey Javier"), so a host transcribes `audio` and checks it with
+`TriggerPhrase.transcript(_:contains:)` before acting.
+
+What a host receives and owes: `audio` is up to 2.5 s of whatever the microphone picked up
+before the wake, handed over once, on the main actor. On a false wake it is speech in the room
+that nobody meant for the assistant. The host transcribes it on the device, never saves,
+journals, logs or sends it, and lets go of it as soon as the phrase is confirmed or refused.
+The listener keeps none of it after the hand-over, and stopping, failing or re-arming drops
+what it heard. A `WakeDetection` prints, debug-prints and reflects only the audio's sample
+count, so logging one does not write the audio out.
 
 `InProcessWakeDetector` scores 80 ms frames (1280 samples) with a `WakeScoringEngine`: one
 detection per arm, a threshold in 0.05...0.95, and any error disarms it. It wakes when
@@ -61,7 +74,8 @@ let listener = WakeListener(
     detector: InProcessWakeDetector(engine: engine, phrase: model.phrase, model: model.id),
     source: microphone, threshold: settings.wakeThreshold, frames: settings.wakeFrames)
 listener.onWake = { detection in
-    if registry.action(forPhrase: detection.phrase) == .agentTurn { startAgentTurn() }
+    guard registry.action(forPhrase: detection.phrase) == .agentTurn else { return }
+    confirm(detection.audio, phrase: detection.phrase)  // transcribe, then TriggerPhrase.transcript(_:contains:)
 }
 await listener.start()
 ```

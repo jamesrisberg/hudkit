@@ -85,6 +85,7 @@ struct InProcessWakeDetectorTests {
         #expect(hit.score == Double(Float(0.6)))
         #expect(hit.frames == 3)
         #expect(hit.peak == Double(Float(0.98)))
+        #expect(hit.audio.isEmpty)  // the listener adds what it heard
         // An older caller's detection is a run of one frame that peaked at its score.
         #expect(WakeDetection(score: 0.7, phrase: "x") == WakeDetection(score: 0.7, phrase: "x", frames: 1, peak: 0.7))
     }
@@ -119,6 +120,56 @@ struct InProcessWakeDetectorTests {
             _ = try await detector.detect(Array(repeating: 0, count: 16_001))
         }
     }
+}
+
+struct WakeDetectionTests {
+    /// On a false wake the audio is speech in the room: printing, logging or reflecting a
+    /// detection shows how much audio it holds, never the samples.
+    @Test func printingOrReflectingADetectionNeverShowsItsAudio() {
+        let detection = WakeDetection(
+            score: 0.9, phrase: "Hey Jarvis", frames: 2, peak: 0.97, audio: [Float](repeating: 0.123_456, count: 40_000))
+        let shown = #"WakeDetection(score: 0.9, phrase: "Hey Jarvis", frames: 2, peak: 0.97, audio: 40000 samples)"#
+        #expect(detection.description == shown)
+        #expect(String(describing: detection) == shown)
+        #expect("\(detection)" == shown)
+        #expect(detection.debugDescription == shown)
+        #expect(String(reflecting: detection) == shown)
+
+        let mirror = Mirror(reflecting: detection)
+        #expect(mirror.children.map(\.label) == ["score", "phrase", "frames", "peak", "audio"])
+        #expect(Array(mirror.children).last.map { "\($0.value)" } == "40000 samples")
+
+        var printed = ""
+        print(detection, to: &printed)
+        debugPrint(detection, to: &printed)
+        dump(detection, to: &printed)
+        dump([detection], to: &printed)
+        #expect(!printed.contains("0.123"), "\(printed)")
+        #expect(printed.components(separatedBy: "40000 samples").count >= 5, "\(printed)")
+    }
+}
+
+/// Pushes `samples` in 100 ms chunks at a microphone's pace: each chunk is scored before the next
+/// one is pushed. Counts frames from a fresh arm. With `done`, it stops pushing once that holds
+/// and returns only when it does: a frame is scored before the listener acts on its score.
+@MainActor
+func feed(_ samples: [Float], to source: FakeAudioSource, scoredFrames: () -> Int,
+          until done: (() -> Bool)? = nil) async throws {
+    let finished = { done?() ?? false }
+    var offset = 0
+    while offset < samples.count, !finished() {
+        let chunk = Array(samples[offset..<min(offset + 1600, samples.count)])
+        let expected = scoredFrames() + (offset + chunk.count) / 1280 - offset / 1280
+        source.onSamples?(chunk)
+        offset += chunk.count
+        try await eventually { scoredFrames() >= expected || finished() }
+    }
+    if let done { try await eventually(done) }
+}
+
+/// Samples numbered by their position, so a hand-over can be checked sample by sample.
+func numbered(_ count: Int, from first: Int = 0) -> [Float] {
+    (first..<(first + count)).map { Float($0) / 100_000 }
 }
 
 @MainActor
@@ -210,6 +261,72 @@ struct WakeListenerTests {
         #expect(!source.running)
     }
 
+    @Test func aWakeHandsOverTheLastTwoAndAHalfSecondsOnce() async throws {
+        let engine = ScriptedWakeEngine()
+        let source = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: engine, phrase: "x", model: "x"), source: source, frames: 2)
+        var wakes: [WakeDetection] = []
+        listener.onWake = { wakes.append($0) }
+        await listener.start()
+        #expect(WakeListener.heardSamples == 40_000)
+
+        // Three seconds: 37 whole frames, the last two at the threshold. The wake comes in the
+        // last chunk, and all of that chunk is handed over.
+        engine.push(Array(repeating: 0, count: 35) + [0.9, 0.95])
+        let fed = numbered(48_000)
+        try await feed(fed, to: source, scoredFrames: { engine.frameCount }, until: { listener.state == .woke })
+        #expect(engine.frameCount == 37)
+        #expect(wakes.count == 1)
+        let first = try #require(wakes.first)
+        #expect(first.audio.count == WakeListener.heardSamples)
+        #expect(first.audio == Array(fed.suffix(WakeListener.heardSamples)))
+        #expect(first.peak == Double(Float(0.95)))
+
+        // Handed over once: the next wake carries only what was heard after re-arming.
+        await listener.rearm()
+        engine.push([0.9, 0.9])
+        let after = numbered(3200)
+        try await feed(after, to: source, scoredFrames: { engine.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.count == 2)
+        #expect(wakes.last?.audio == after)
+    }
+
+    @Test func stoppingClearsWhatWasHeard() async throws {
+        let engine = ScriptedWakeEngine()
+        let source = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: engine, phrase: "x", model: "x"), source: source, frames: 2)
+        var wakes: [WakeDetection] = []
+        listener.onWake = { wakes.append($0) }
+        await listener.start()
+        try await feed(numbered(3200), to: source, scoredFrames: { engine.frameCount })
+        await listener.stop()
+        await listener.start()
+        engine.push([0.9, 0.9])
+        let after = numbered(3200, from: 50_000)
+        try await feed(after, to: source, scoredFrames: { engine.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.map(\.audio) == [after])
+    }
+
+    @Test func aFailureClearsWhatWasHeard() async throws {
+        let engine = ScriptedWakeEngine()
+        let source = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: engine, phrase: "x", model: "x"), source: source, frames: 2)
+        var wakes: [WakeDetection] = []
+        listener.onWake = { wakes.append($0) }
+        await listener.start()
+        try await feed(numbered(3200), to: source, scoredFrames: { engine.frameCount })
+        source.onSamples?([.nan])
+        try await eventually { if case .failed = listener.state { return true } else { return false } }
+        await listener.start()
+        engine.push([0.9, 0.9])
+        let after = numbered(3200, from: 50_000)
+        try await feed(after, to: source, scoredFrames: { engine.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.map(\.audio) == [after])
+    }
+
     @Test func badAudioOrASourceFailureStopsListening() async throws {
         let source = FakeAudioSource()
         let listener = WakeListener(
@@ -234,6 +351,25 @@ struct WakeListenerTests {
         await listener.start()
         #expect(listener.state == .failed(WakeDetectorError.invalidThreshold.localizedDescription))
         #expect(source.starts == 0)
+    }
+}
+
+struct SampleRingTests {
+    @Test func keepsTheMostRecentSamplesOldestFirst() {
+        var ring = SampleRing(capacity: 5)
+        #expect(ring.samples.isEmpty)
+        ring.append([1, 2, 3])
+        #expect(ring.samples == [1, 2, 3])
+        ring.append([4, 5, 6, 7])  // fills the room left, then wraps
+        #expect(ring.samples == [3, 4, 5, 6, 7])
+        ring.append([8])
+        #expect(ring.samples == [4, 5, 6, 7, 8])
+        ring.append(Array(10...16).map(Float.init))  // more than it holds
+        #expect(ring.samples == [12, 13, 14, 15, 16])
+        ring.removeAll()
+        #expect(ring.samples.isEmpty)
+        ring.append([9])
+        #expect(ring.samples == [9])
     }
 }
 
