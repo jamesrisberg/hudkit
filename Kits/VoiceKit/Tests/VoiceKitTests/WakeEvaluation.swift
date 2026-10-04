@@ -172,7 +172,7 @@ enum WakeEvaluation {
         _ samples: [Float], with engine: WakeScoringEngine, threshold: Double
     ) async throws -> WakeDetection? {
         let detector = InProcessWakeDetector(engine: engine, phrase: "Hey Jarvis", model: "evaluation")
-        _ = try await detector.arm(threshold: threshold)
+        _ = try await detector.arm(threshold: threshold, frames: 1)
         var offset = 0
         while offset < samples.count {
             let end = min(offset + 4_096, samples.count)

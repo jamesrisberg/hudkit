@@ -31,17 +31,24 @@ Dependencies: [onnxruntime-swift-package-manager](https://github.com/microsoft/o
 ## Wake word
 
 `WakeListener` connects a `WakeAudioSource` (the host's microphone: 16 kHz mono chunks,
-nominally in -1...1, at most one second each, on the main actor) to a `WakeDetector`. It arms
+nominally in -1...1, at most one second each, on the main actor) to a `WakeDetector`, with a
+threshold and a frame count (`frames` has no default: pass `VoiceSettings.wakeFrames`). It arms
 the detector, starts the source, feeds chunks one at a time and calls `onWake` once; it then
-stays quiet, with the source still running, until `rearm()`. `stop()` stops the source, also
-when it comes during a slow `source.start()`. A detector error, a non-finite sample, a source
-that fails to start, or more than `WakeListener.maximumBacklogSamples` (half a second) of
-audio waiting for the detector moves it to `.failed` with the source stopped; the host calls
-`start()` again to resume.
+stays quiet, with the source still running, until `rearm()` (which can also change the
+threshold or the frame count). `stop()` stops the source, also when it comes during a slow
+`source.start()`. A detector error, a non-finite sample, a source that fails to start, or more
+than `WakeListener.maximumBacklogSamples` (half a second) of audio waiting for the detector
+moves it to `.failed` with the source stopped; the host calls `start()` again to resume.
+
+A `WakeDetection` carries the score of the frame that fired and the run it completed: `frames`
+(always the count the detector was armed with) and its `peak` score.
 
 `InProcessWakeDetector` scores 80 ms frames (1280 samples) with a `WakeScoringEngine`: one
-detection per arm, a threshold in 0.05...0.95, and any error disarms it. Samples outside
--1...1 are clipped; non-finite samples are an error.
+detection per arm, a threshold in 0.05...0.95, and any error disarms it. It wakes when
+`frames` (1...4) consecutive frames score at or above the threshold; a frame below it
+restarts the count. A spoken wake phrase holds for several frames, so two frames wake on it
+80 ms later than one and ignore a sound that reaches the threshold for a single frame.
+Samples outside -1...1 are clipped; non-finite samples are an error.
 `OpenWakeWordEngine` is openWakeWord 0.6.0's streaming pipeline (melspectrogram, speech
 embedding, keyword classifier) on ONNX Runtime, one thread.
 
@@ -52,7 +59,7 @@ guard store.isReady else { return }                // store.download() when the 
 let engine = try OpenWakeWordEngine(model: model, directory: store.directory)
 let listener = WakeListener(
     detector: InProcessWakeDetector(engine: engine, phrase: model.phrase, model: model.id),
-    source: microphone, threshold: settings.wakeThreshold)
+    source: microphone, threshold: settings.wakeThreshold, frames: settings.wakeFrames)
 listener.onWake = { detection in
     if registry.action(forPhrase: detection.phrase) == .agentTurn { startAgentTurn() }
 }
@@ -165,6 +172,7 @@ process stops at the first synthesis (MLX reports "Failed to load the default me
 | `wakeWordEnabled` | Bool | false | Listen for the wake phrase |
 | `wakePhrase` | String | "Hey Computer" | The phrase to listen for |
 | `wakeThreshold` | Double | 0.5 | 0.05...0.95; higher wakes less often |
+| `wakeFrames` | Int | 2 | 1...4 consecutive 80 ms frames at or above the threshold; more wakes less often on a passing sound |
 | `replyVoice` | `kokoro` \| `system` \| `grok` | `kokoro` | Preferred reply voice |
 | `speakReplies` | Bool | false | Speak replies; otherwise replies are text only |
 | `kokoro.voice` | String | `af_heart` | A `KokoroModels.voices` id |
@@ -205,7 +213,7 @@ run the real models when pointed at installed files and are skipped otherwise:
 
 | Variable | Folder | Test |
 |---|---|---|
-| `VOICEKIT_WAKE_MODELS` | the Hey Jarvis files | openWakeWord scores match the Python reference on a fixture |
+| `VOICEKIT_WAKE_MODELS` | the Hey Jarvis files | openWakeWord scores match the Python reference on a fixture, and the detector wakes on it at the settings default |
 | `VOICEKIT_KOKORO_MODELS` | an installed Kokoro folder | Kokoro synthesizes finite, audible audio offline (nothing is played) |
 
 The Kokoro test needs MLX's Metal library, which `swift test` does not place where MLX looks,

@@ -22,6 +22,11 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   drawn in the strip's outline, so a straight strip and a corner L are each one slab. Its
   hairline border is drawn just inside the slab, the same width all round, including along an
   L's inner sides.
+- The wake word no longer wakes on a single stray sound: the phrase has to hold for two 80 ms
+  frames in a row (the new voice setting `wakeFrames`, 1 to 4), so a real "Hey Jarvis" wakes
+  about 80 ms later than before. On 14.7 hours of recorded dictation this halves the false
+  wakes (4 to 2). For apps built on VoiceKit: `WakeDetector.arm(threshold:frames:)` replaces
+  `arm(threshold:)`, and `WakeListener` needs `frames`.
 
 ### Removed
 - `HUDGlassView.Material.automatic`, `HUDGlassView.usesLiquidGlass`,

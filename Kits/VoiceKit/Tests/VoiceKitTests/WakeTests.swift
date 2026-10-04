@@ -48,37 +48,73 @@ final class FakeAudioSource: WakeAudioSource {
 
 @MainActor
 struct InProcessWakeDetectorTests {
-    @Test func scoresWholeFramesAndFiresOncePerArm() async throws {
+    @Test func firesOnConsecutiveFramesOncePerArm() async throws {
         let engine = ScriptedWakeEngine()
         let detector = InProcessWakeDetector(engine: engine, phrase: "Hey Jarvis", model: "scripted")
         await #expect(throws: WakeDetectorError.self) { _ = try await detector.detect([0]) }
-        let info = try await detector.arm(threshold: 0.5)
+        let info = try await detector.arm(threshold: 0.5, frames: 2)
         #expect(info.phrase == "Hey Jarvis")
         #expect(try await detector.detect(Array(repeating: 0, count: 1000)) == nil)
         #expect(engine.frameCount == 0)  // less than one frame buffered
-        engine.push([0.1, 0.7])
-        let hit = try await detector.detect(Array(repeating: 0, count: 2000))
-        #expect(hit == WakeDetection(score: Double(Float(0.7)), phrase: "Hey Jarvis"))
-        #expect(engine.frameCount == 2)
+        // A single frame at or above the threshold is not a wake; a frame below restarts the count.
+        engine.push([0.1, 0.7, 0.2, 0.6])
+        #expect(try await detector.detect(Array(repeating: 0, count: 4120)) == nil)
+        #expect(engine.frameCount == 4)
+        // The run carries over from one chunk to the next: 0.6, then 0.9 wakes.
+        engine.push([0.9])
+        let hit = try await detector.detect(Array(repeating: 0, count: 1280))
+        #expect(hit == WakeDetection(score: Double(Float(0.9)), phrase: "Hey Jarvis", frames: 2, peak: Double(Float(0.9))))
+        #expect(engine.frameCount == 5)
         // Latched until armed again.
         await #expect(throws: WakeDetectorError.self) {
             _ = try await detector.detect(Array(repeating: 0, count: 1280))
         }
-        _ = try await detector.arm(threshold: 0.9)
+        _ = try await detector.arm(threshold: 0.9, frames: 1)
         engine.push([0.8])
         #expect(try await detector.detect(Array(repeating: 0, count: 1280)) == nil)
+        engine.push([0.95])
+        #expect(try await detector.detect(Array(repeating: 0, count: 1280))?.frames == 1)
     }
 
-    @Test func rejectsBadAudioAndThresholds() async throws {
+    @Test func aDetectionCarriesItsRunAndPeak() async throws {
+        let engine = ScriptedWakeEngine()
+        let detector = InProcessWakeDetector(engine: engine, phrase: "x", model: "x")
+        _ = try await detector.arm(threshold: 0.5, frames: 3)
+        engine.push([0.7, 0.98, 0.6])
+        let hit = try #require(try await detector.detect(Array(repeating: 0, count: 3840)))
+        #expect(hit.score == Double(Float(0.6)))
+        #expect(hit.frames == 3)
+        #expect(hit.peak == Double(Float(0.98)))
+        // An older caller's detection is a run of one frame that peaked at its score.
+        #expect(WakeDetection(score: 0.7, phrase: "x") == WakeDetection(score: 0.7, phrase: "x", frames: 1, peak: 0.7))
+    }
+
+    @Test func armingAgainRestartsTheCount() async throws {
+        let engine = ScriptedWakeEngine()
+        let detector = InProcessWakeDetector(engine: engine, phrase: "x", model: "x")
+        _ = try await detector.arm(threshold: 0.5, frames: 2)
+        engine.push([0.9])
+        #expect(try await detector.detect(Array(repeating: 0, count: 1280)) == nil)
+        _ = try await detector.arm(threshold: 0.5, frames: 2)
+        engine.push([0.9])
+        #expect(try await detector.detect(Array(repeating: 0, count: 1280)) == nil)
+        engine.push([0.9])
+        #expect(try await detector.detect(Array(repeating: 0, count: 1280))?.frames == 2)
+    }
+
+    @Test func rejectsBadAudioThresholdsAndFrameCounts() async throws {
         let detector = InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x")
-        await #expect(throws: WakeDetectorError.self) { _ = try await detector.arm(threshold: 0.99) }
-        _ = try await detector.arm(threshold: 0.5)
+        await #expect(throws: WakeDetectorError.invalidThreshold) { _ = try await detector.arm(threshold: 0.99, frames: 2) }
+        await #expect(throws: WakeDetectorError.invalidFrames) { _ = try await detector.arm(threshold: 0.5, frames: 0) }
+        await #expect(throws: WakeDetectorError.invalidFrames) { _ = try await detector.arm(threshold: 0.5, frames: 5) }
+        #expect(InProcessWakeDetector.framesRange == 1...4)
+        _ = try await detector.arm(threshold: 0.5, frames: 2)
         // A loud sample outside -1...1 is clipped by the engine, not an error.
         #expect(try await detector.detect([2, -3]) == nil)
         await #expect(throws: WakeDetectorError.self) { _ = try await detector.detect([.nan]) }
         // Any error disarms.
         await #expect(throws: WakeDetectorError.self) { _ = try await detector.detect([0]) }
-        _ = try await detector.arm(threshold: 0.5)
+        _ = try await detector.arm(threshold: 0.5, frames: 2)
         await #expect(throws: WakeDetectorError.self) {
             _ = try await detector.detect(Array(repeating: 0, count: 16_001))
         }
@@ -92,7 +128,7 @@ struct WakeListenerTests {
         let source = FakeAudioSource()
         let listener = WakeListener(
             detector: InProcessWakeDetector(engine: engine, phrase: "Hey Computer", model: "scripted"),
-            source: source)
+            source: source, frames: 2)
         var wakes: [WakeDetection] = []
         listener.onWake = { wakes.append($0) }
         #expect(listener.state == .idle)
@@ -106,35 +142,79 @@ struct WakeListenerTests {
         try await eventually { engine.frameCount == 2 }
         #expect(wakes.isEmpty)
 
+        // One frame at the threshold is not enough for a two-frame rule; the second is.
         engine.setNext(0.95)
+        source.push(1280)
+        try await eventually { engine.frameCount == 3 }
+        #expect(listener.state == .listening)
         source.push(1280)
         try await eventually { listener.state == .woke }
         #expect(wakes.map(\.phrase) == ["Hey Computer"])
+        #expect(wakes.map(\.frames) == [2])
         // Quiet until re-armed; the source keeps running for the host's utterance.
         source.push(1280)
         for _ in 0..<20 { await Task.yield() }
-        #expect(engine.frameCount == 3)
+        #expect(engine.frameCount == 4)
         #expect(source.running)
 
+        // Re-armed, it scores again at once.
         engine.setNext(0)
         await listener.rearm()
         #expect(listener.state == .listening)
         source.push(1280)
-        try await eventually { engine.frameCount == 4 }
+        try await eventually { engine.frameCount == 5 }
 
         await listener.stop()
         #expect(listener.state == .idle)
         #expect(!source.running)
         source.push(1280)
         for _ in 0..<20 { await Task.yield() }
+        #expect(engine.frameCount == 5)
+    }
+
+    @Test func theFrameRuleReachesTheDetector() async throws {
+        let engine = ScriptedWakeEngine()
+        engine.setNext(0.95)
+        let source = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: engine, phrase: "x", model: "x"),
+            source: source, threshold: 0.5, frames: 3)
+        await listener.start()
+        source.push(2560)
+        try await eventually { engine.frameCount == 2 }
+        #expect(listener.state == .listening)
+        source.push(1280)
+        try await eventually { listener.state == .woke }
+        await listener.rearm(frames: 1)
+        source.push(1280)
+        try await eventually { listener.state == .woke }
         #expect(engine.frameCount == 4)
+    }
+
+    @Test func anInvalidFrameCountFailsListening() async {
+        let source = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"),
+            source: source, frames: 5)
+        await listener.start()
+        #expect(listener.state == .failed(WakeDetectorError.invalidFrames.localizedDescription))
+        #expect(source.starts == 0)
+
+        let listening = WakeListener(
+            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"),
+            source: source, frames: 2)
+        await listening.start()
+        #expect(listening.state == .listening)
+        await listening.rearm(frames: 0)
+        #expect(listening.state == .failed(WakeDetectorError.invalidFrames.localizedDescription))
+        #expect(!source.running)
     }
 
     @Test func badAudioOrASourceFailureStopsListening() async throws {
         let source = FakeAudioSource()
         let listener = WakeListener(
             detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"),
-            source: source)
+            source: source, frames: 2)
         await listener.start()
         source.onSamples?([Float.nan])
         try await eventually { if case .failed = listener.state { return true } else { return false } }
@@ -150,7 +230,7 @@ struct WakeListenerTests {
         let source = FakeAudioSource()
         let listener = WakeListener(
             detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"),
-            source: source, threshold: 2)
+            source: source, threshold: 2, frames: 2)
         await listener.start()
         #expect(listener.state == .failed(WakeDetectorError.invalidThreshold.localizedDescription))
         #expect(source.starts == 0)
@@ -178,7 +258,7 @@ struct RealWakeModelTests {
     /// Python openWakeWord 0.6.0 on the same fixture: zeros, then 0.271, 0.975, 0.996 …
     /// peaking at 0.9992 on frame 25 (1 s of silence padding on each side).
     @Test(.enabled(if: wakeModels != nil, "set VOICEKIT_WAKE_MODELS to a folder with the Hey Jarvis files"))
-    func openWakeWordMatchesThePythonReference() async throws {
+    @MainActor func openWakeWordMatchesThePythonReference() async throws {
         let source = try #require(wakeModels)
         // Installed through the seed path, exactly as a real install from another app's copy.
         let directory = try temporaryDirectory("wake")
@@ -200,6 +280,22 @@ struct RealWakeModelTests {
         #expect(peak > 0.95, "scores: \(scores)")
         #expect(scores.firstIndex { $0 >= 0.5 }.map { (20...24).contains($0) } == true, "scores: \(scores)")
         #expect(scores.prefix(18).allSatisfy { $0 < 0.05 }, "scores: \(scores)")
+
+        // The detector at the settings default wakes one frame after the first at the owner's
+        // threshold, fed in 100 ms chunks as the microphone delivers them.
+        let threshold = 0.53
+        let frames = VoiceSettings().wakeFrames
+        let first = try #require(scores.firstIndex { Double($0) >= threshold })
+        let detector = InProcessWakeDetector(engine: engine, phrase: model.phrase, model: model.id)
+        _ = try await detector.arm(threshold: threshold, frames: frames)
+        var hit: WakeDetection?
+        for start in stride(from: 0, to: audio.count, by: 1600) where hit == nil {
+            hit = try await detector.detect(Array(audio[start..<min(start + 1600, audio.count)]))
+        }
+        let detection = try #require(hit)
+        #expect(detection.frames == 2)
+        #expect(detection.score == Double(scores[first + 1]), "scores: \(scores)")
+        #expect(detection.peak == Double(max(scores[first], scores[first + 1])))
 
         // A non-finite sample is an error, not a crash.
         await #expect(throws: WakeDetectorError.self) {
@@ -236,7 +332,7 @@ final class SuspendingAudioSource: WakeAudioSource {
 @MainActor
 final class StuckDetector: WakeDetector {
     var detects = 0
-    func arm(threshold: Double) async throws -> WakeDetectorInfo { WakeDetectorInfo(phrase: "x", model: "x") }
+    func arm(threshold: Double, frames: Int) async throws -> WakeDetectorInfo { WakeDetectorInfo(phrase: "x", model: "x") }
     func detect(_ samples: [Float]) async throws -> WakeDetection? {
         detects += 1
         try await Task.sleep(for: .seconds(3600))
@@ -250,7 +346,8 @@ struct WakeListenerLifecycleTests {
     @Test func stopDuringASlowSourceStartLeavesTheMicrophoneOff() async throws {
         let source = SuspendingAudioSource()
         let listener = WakeListener(
-            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"), source: source)
+            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"), source: source,
+            frames: 2)
         let starting = Task { await listener.start() }
         try await eventually { source.pending != nil }
         await listener.stop()
@@ -263,7 +360,8 @@ struct WakeListenerLifecycleTests {
     @Test func aStaleStartDoesNotStopTheSourceOfANewerOne() async throws {
         let source = SuspendingAudioSource()
         let listener = WakeListener(
-            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"), source: source)
+            detector: InProcessWakeDetector(engine: ScriptedWakeEngine(), phrase: "x", model: "x"), source: source,
+            frames: 2)
         let first = Task { await listener.start() }
         try await eventually { source.pending != nil }
         await listener.stop()
@@ -284,7 +382,7 @@ struct WakeListenerLifecycleTests {
     @Test func audioBackingUpBeyondTheCapFailsListening() async throws {
         let source = FakeAudioSource()
         let detector = StuckDetector()
-        let listener = WakeListener(detector: detector, source: source)
+        let listener = WakeListener(detector: detector, source: source, frames: 2)
         await listener.start()
         source.push(1280)
         try await eventually { detector.detects == 1 }

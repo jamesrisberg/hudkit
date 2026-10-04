@@ -10,6 +10,8 @@ struct VoiceSettingsTests {
         #expect(settings.wakePhrase == "Hey Computer")
         #expect(!settings.wakeWordEnabled)
         #expect(settings.wakeThreshold == 0.5)
+        #expect(settings.wakeFrames == 2)
+        #expect(VoiceSettings.wakeFramesRange == 1...4)
         #expect(settings.replyVoice == .kokoro)
         #expect(!settings.speakReplies)
         #expect(settings.kokoro == .init(voice: "af_heart", speed: 1))
@@ -21,6 +23,7 @@ struct VoiceSettingsTests {
     @Test func roundTripsAndHoldsNoSecrets() throws {
         var settings = VoiceSettings()
         settings.wakeWordEnabled = true
+        settings.wakeFrames = 3
         settings.replyVoice = .grok
         settings.speakReplies = true
         settings.kokoro.voice = "bm_george"
@@ -34,19 +37,22 @@ struct VoiceSettingsTests {
 
     @Test func decodingFillsGapsAndRepairsBadValues() throws {
         let stored = Data("""
-            {"wakeWordEnabled": true, "wakeThreshold": 3, "replyVoice": "vibevoice",
+            {"wakeWordEnabled": true, "wakeThreshold": 3, "wakeFrames": 9, "replyVoice": "vibevoice",
              "wakePhrase": " !! ", "kokoro": {"voice": "zz_nobody", "speed": 9},
              "system": {"rate": 0.1}, "grok": {"voice": "Eve"}, "unknown": 1}
             """.utf8)
         let settings = try JSONDecoder().decode(VoiceSettings.self, from: stored)
         #expect(settings.wakeWordEnabled)
         #expect(settings.wakeThreshold == 0.95)
+        #expect(settings.wakeFrames == 4)
         #expect(settings.replyVoice == .kokoro)
         #expect(settings.wakePhrase == "Hey Computer")
         #expect(settings.kokoro == .init(voice: "af_heart", speed: 2))
         #expect(settings.system.rate == 0.5)
         #expect(settings.grok.voice == "eve")
         #expect(try JSONDecoder().decode(VoiceSettings.self, from: Data("{}".utf8)) == VoiceSettings())
+        let none = try JSONDecoder().decode(VoiceSettings.self, from: Data(#"{"wakeFrames": 0}"#.utf8))
+        #expect(none.wakeFrames == 1)
     }
 
     @Test func theReplyVoiceFallsBackToTheSystemVoice() {

@@ -42,6 +42,7 @@ public final class WakeListener {
     private let detector: WakeDetector
     private let source: WakeAudioSource
     private var threshold: Double
+    private var frames: Int
     private var backlog: [[Float]] = []
     private var backlogSamples = 0
     private var draining = false
@@ -50,10 +51,14 @@ public final class WakeListener {
     /// when none is left, so it never turns off the microphone a newer start opened.
     private var sourceStartsInFlight = 0
 
-    public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5) {
+    /// - Parameters:
+    ///   - threshold: the score a frame must reach (`VoiceSettings.wakeThreshold`).
+    ///   - frames: the consecutive frames at or above it that make a wake (`VoiceSettings.wakeFrames`).
+    public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5, frames: Int) {
         self.detector = detector
         self.source = source
         self.threshold = threshold
+        self.frames = frames
     }
 
     /// Arms the detector, then starts the source.
@@ -64,7 +69,7 @@ public final class WakeListener {
         state = .arming
         source.onSamples = { [weak self] samples in self?.receive(samples, token: token) }
         do {
-            info = try await detector.arm(threshold: threshold)
+            info = try await detector.arm(threshold: threshold, frames: frames)
             guard generation == token else { return }
             sourceStartsInFlight += 1
             defer { sourceStartsInFlight -= 1 }
@@ -86,18 +91,19 @@ public final class WakeListener {
         }
     }
 
-    /// Listens for the next wake after one was reported, optionally at a new threshold.
-    /// Ignored while arming, so overlapping calls arm once.
-    public func rearm(threshold: Double? = nil) async {
+    /// Listens for the next wake after one was reported, optionally with a new threshold or
+    /// frame count. Ignored while arming, so overlapping calls arm once.
+    public func rearm(threshold: Double? = nil, frames: Int? = nil) async {
         guard state == .woke || state == .listening else { return }
         if let threshold { self.threshold = threshold }
+        if let frames { self.frames = frames }
         let token = UUID()
         generation = token
         clearBacklog()
         state = .arming
         source.onSamples = { [weak self] samples in self?.receive(samples, token: token) }
         do {
-            info = try await detector.arm(threshold: self.threshold)
+            info = try await detector.arm(threshold: self.threshold, frames: self.frames)
             guard generation == token else { return }
             state = .listening
         } catch {
