@@ -238,12 +238,13 @@ cd Kits/VoiceKit && swift build && swift test
 ```
 
 The tests use fakes for the microphone, the models, the network and
-audio playback: nothing opens the microphone, reaches the network or makes a sound. Two tests
-run the real models when pointed at installed files and are skipped otherwise:
+audio playback: nothing opens the microphone, reaches the network or makes a sound. Three
+tests run the real models when pointed at installed files and are skipped otherwise:
 
 | Variable | Folder | Test |
 |---|---|---|
 | `VOICEKIT_WAKE_MODELS` | the Hey Jarvis files | openWakeWord scores match the Python reference on a fixture, and the detector wakes on it at the settings default |
+| `VOICEKIT_WAKE_MODELS` and `VOICEKIT_WAKE_EVAL_AUDIO` | the Hey Jarvis files; a folder of .wav files or a text file listing them | `WakeEvaluationTests` prints how often each threshold and frame count would wake on that audio, and the real detector's wakes at the settings default (an instrument: it asserts no rates; see its doc comment for the other variables) |
 | `VOICEKIT_KOKORO_MODELS` | an installed Kokoro folder | Kokoro synthesizes finite, audible audio offline (nothing is played) |
 
 The Kokoro test needs MLX's Metal library, which `swift test` does not place where MLX looks,

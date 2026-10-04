@@ -29,6 +29,55 @@ struct WakeEvaluationCountingTests {
         #expect(WakeEvaluation.events(in: loud, threshold: 0.5, run: 3).map(\.frame) == [2, 30, 58])
     }
 
+    @MainActor @Test func theRealDetectorPlacesItsWakesAsTheReplayDoes() async throws {
+        // A constant high score: armed again after each skip, the detector fires where the replay does.
+        let engine = ScriptedWakeEngine()
+        engine.setNext(0.9)
+        let samples = [Float](repeating: 0, count: 60 * WakeEvaluation.frameSamples + 500)
+        let scores = [Float](repeating: 0.9, count: 60)
+        let detected = try await WakeEvaluation.detections(samples, with: engine, threshold: 0.5, frames: 2)
+        #expect(detected.map(\.frame) == [1, 28, 55])
+        #expect(detected == WakeEvaluation.events(in: scores, threshold: 0.5, run: 2))
+
+        // Agreement is judged at the owner's threshold and the settings default.
+        let atDefault = try await WakeEvaluation.detections(
+            samples, with: engine, threshold: WakeEvaluation.ownerThreshold, frames: WakeEvaluation.detectorFrames)
+        func agreement(_ events: [WakeEvaluation.Event]) -> WakeEvaluation.FileResult.Agreement {
+            WakeEvaluation.FileResult(name: "x", scores: scores, detected: events, failure: nil).agreement
+        }
+        #expect(agreement(atDefault) == .agrees)
+        #expect(agreement(Array(atDefault.prefix(1))) == .differsAfterARearm)
+        #expect(agreement([]) == .disagrees)
+    }
+
+    @Test func aFileWithNoWholeFrameIsAFailure() async throws {
+        let directory = try temporaryDirectory("wake-eval")
+        defer { try? FileManager.default.removeItem(at: directory.deletingLastPathComponent()) }
+        func silence(_ count: Int, _ name: String) throws -> URL {
+            let url = directory.appendingPathComponent(name)
+            let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+            let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)))
+            buffer.frameLength = AVAudioFrameCount(count)
+            let file = try AVAudioFile(
+                forWriting: url,
+                settings: [
+                    AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 16_000, AVNumberOfChannelsKey: 1,
+                    AVLinearPCMBitDepthKey: 16, AVLinearPCMIsFloatKey: false,
+                ])
+            try file.write(from: buffer)
+            return url
+        }
+        let engine = ScriptedWakeEngine()
+        let short = await WakeEvaluation.evaluate(try silence(1000, "short.wav"), padSeconds: 0, with: engine)
+        #expect(short.failure != nil)
+        let whole = await WakeEvaluation.evaluate(try silence(2560, "whole.wav"), padSeconds: 0, with: engine)
+        #expect(whole.failure == nil)
+        #expect(whole.scores.count == 2)
+        let missing = await WakeEvaluation.evaluate(
+            directory.appendingPathComponent("missing.wav"), padSeconds: 0, with: engine)
+        #expect(missing.failure != nil)
+    }
+
     @Test func theComparisonIsTheDetectors() {
         // `>=` on the score widened to Double, so an exact tie fires.
         #expect(WakeEvaluation.events(in: [0.5], threshold: 0.5, run: 1).count == 1)
@@ -98,7 +147,6 @@ struct WakeEvaluationTests {
         let workers = min(configuration.workers, max(1, files.count))
         let engines = try (0..<workers).map { _ in try OpenWakeWordEngine(model: model, directory: directory) }
         let results = Locked([WakeEvaluation.FileResult?](repeating: nil, count: files.count))
-        let crossChecks = Locked<[String]>([])
         let cursor = Locked(0)
         let started = Date()
 
@@ -112,31 +160,8 @@ struct WakeEvaluationTests {
                             $0 += 1
                         }
                         guard index < files.count else { return }
-                        let url = files[index]
-                        var result = WakeEvaluation.FileResult(name: url.lastPathComponent, scores: [], failure: nil)
-                        do {
-                            let samples = try WakeEvaluation.samples(from: url, padSeconds: configuration.padSeconds)
-                            let scores = try await WakeEvaluation.score(samples, with: engine)
-                            result = WakeEvaluation.FileResult(name: url.lastPathComponent, scores: scores, failure: nil)
-                            // The real detector must agree with the replay on the first wake of
-                            // every file that has one, and of the first few that do not.
-                            let owner = WakeEvaluation.ownerThreshold
-                            let expected = WakeEvaluation.events(in: scores, threshold: owner, run: 1).first
-                            if expected != nil || index < 5 {
-                                let hit = try await WakeEvaluation.firstDetection(
-                                    samples, with: engine, threshold: owner)
-                                let agrees = hit?.score == expected.map { Double($0.score) }
-                                crossChecks.mutate {
-                                    $0.append(
-                                        "\(url.lastPathComponent): \(agrees ? "agrees" : "DISAGREES") "
-                                            + "(replay \(expected.map { String(format: "%.4f", $0.score) } ?? "none"), "
-                                            + "detector \(hit.map { String(format: "%.4f", $0.score) } ?? "none"))")
-                                }
-                            }
-                        } catch {
-                            result = WakeEvaluation.FileResult(
-                                name: url.lastPathComponent, scores: [], failure: "\(error)")
-                        }
+                        let result = await WakeEvaluation.evaluate(
+                            files[index], padSeconds: configuration.padSeconds, with: engine)
                         results.mutate { $0[index] = result }
                         if (index + 1) % 50 == 0 { print("wake evaluation: file \(index + 1) of \(files.count) started") }
                     }
@@ -147,11 +172,10 @@ struct WakeEvaluationTests {
         let finished = results.value.compactMap { $0 }
         let report = WakeEvaluation.report(
             label: configuration.label, results: finished, padSeconds: configuration.padSeconds,
-            wallSeconds: Date().timeIntervalSince(started), crossChecks: crossChecks.value.sorted())
+            wallSeconds: Date().timeIntervalSince(started))
         print(report)
         #expect(finished.contains { $0.failure == nil }, "no file could be scored")
-        #expect(
-            !crossChecks.value.contains { $0.contains("DISAGREES") },
-            "InProcessWakeDetector and the replay disagree: \(crossChecks.value)")
+        let disagreeing = finished.filter { $0.failure == nil && $0.agreement == .disagrees }.map(\.name)
+        #expect(disagreeing.isEmpty, "InProcessWakeDetector and the replay disagree on the first wake: \(disagreeing)")
     }
 }
