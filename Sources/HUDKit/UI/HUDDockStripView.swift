@@ -608,10 +608,9 @@ public final class HUDDockStripView: NSView {
             tile.badgeView.drawBadge(in: tile.badgeView.frame)
         }
         cg.restoreGState()
-        cg.addPath(path)
-        cg.setStrokeColor(borderColor.cgColor)
-        cg.setLineWidth(style.borderWidth)
-        cg.strokePath()
+        cg.addPath(Self.borderBand(path, width: style.borderWidth))
+        cg.setFillColor(borderColor.cgColor)
+        cg.fillPath()
         NSGraphicsContext.restoreGraphicsState()
         return rep
     }

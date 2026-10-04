@@ -190,6 +190,21 @@ final class DockStripBackdropTests: XCTestCase {
         }
     }
 
+    func testTheSnapshotDrawsTheBorderAsTheScreenDoes() throws {
+        let p = corner
+        let view = strip(p)
+        let rep = try XCTUnwrap(view.snapshot(scale: 2))
+        let vertical = p.segments[0]
+        /// The pixel alpha at 2x for a point (view coordinates, origin bottom-left).
+        func alpha(_ x: CGFloat, _ y: CGFloat) throws -> CGFloat {
+            try XCTUnwrap(rep.colorAt(x: Int(x * 2), y: rep.pixelsHigh - 1 - Int(y * 2))).alphaComponent
+        }
+        // The L's inner side at x = 64: the band is the half-point just inside it, nothing outside.
+        let y = vertical.maxY - 40
+        XCTAssertGreaterThan(try alpha(vertical.maxX - 0.25, y), 0.9, "the slab and its border")
+        XCTAssertEqual(try alpha(vertical.maxX + 0.25, y), 0, "nothing outside the slab")
+    }
+
     func testTheBorderIsABandOnAStraightStripToo() throws {
         let p = edge
         let view = strip(p)

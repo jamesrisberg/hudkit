@@ -44,6 +44,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   answer instead of counting any app's window, the check runs again once a desktop switch,
   wake or display change has settled, and while it reports full screen it re-checks every two
   seconds, so leaving full screen by any route brings the panel back within about two seconds.
+- A dock strip's snapshot (`snapshot()`, `writeSnapshot(to:)`) draws the hairline border as the
+  strip shows it on screen: only on the slab, never outside its edge.
 
 ### Added
 - Diagnostics in the unified log (`log show --predicate 'subsystem == "xyz.machud.hudkit"'`):
