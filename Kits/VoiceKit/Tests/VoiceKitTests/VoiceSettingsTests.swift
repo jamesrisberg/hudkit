@@ -73,10 +73,10 @@ struct VoiceSettingsTests {
         #expect(SpeechVoices.make(for: settings, kokoroModelDirectory: missing, secrets: secrets).kind == .system)
         settings.replyVoice = .grok
         #expect(SpeechVoices.make(for: settings, kokoroModelDirectory: missing, secrets: secrets).kind == .system)
-        try secrets.set("xai-key", forKey: VoiceSecrets.grokAPIKey)
+        secrets.set("xai-key", forKey: VoiceSecrets.grokAPIKey)
         let voice = SpeechVoices.make(for: settings, kokoroModelDirectory: missing, secrets: secrets)
         #expect(voice.kind == .grok)
-        try secrets.set("", forKey: VoiceSecrets.grokAPIKey)
+        secrets.set("", forKey: VoiceSecrets.grokAPIKey)
         #expect(secrets.values.isEmpty)
     }
 }
