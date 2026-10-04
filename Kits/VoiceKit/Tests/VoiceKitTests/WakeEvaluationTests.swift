@@ -164,7 +164,7 @@ struct WakeEvaluationTests {
                             files[index], padSeconds: configuration.padSeconds, with: engine)
                         results.mutate { $0[index] = result }
                         if (index + 1) % 50 == 0 {
-                            print("wake evaluation: file \(index + 1) of \(files.count) started")
+                            print("wake evaluation: file \(index + 1) of \(files.count) scored")
                             // Redirected to a file, standard output is block-buffered and the line would
                             // appear only when the run ends.
                             fflush(stdout)
