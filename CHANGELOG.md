@@ -58,6 +58,13 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `Change` and `Observation`).
 - `HUDFullscreenObserver.evidence(screenID:)` and `evidenceByScreenID`: the window that made a
   screen count as full screen; `recheckInterval`. `HUDWindowSnapshot.windowID` and `alpha`.
+- `HUDSoftBackdropView`: a backdrop whose edge fades out instead of ending in a line, for a
+  field such as a radial menu's. It shows a Gaussian blur of what is behind the window (radius
+  25, `blurRadius`) through `field`, an alpha image stretched over the view, with an optional
+  `tint` drawn through the same field, and has the blur from the window's first frame. While
+  Reduce transparency is on, or where the private pieces it uses are missing, it shows the
+  system's own material through the field. `path` and `pathReason` say which and why; the
+  choice, and each time it had to put the blur back, are logged under category `softbackdrop`.
 
 ## [0.3.1] - 2026-10-02
 

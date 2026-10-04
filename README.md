@@ -46,7 +46,7 @@ Check HUDKit out next to the apps (`~/dev/hudkit` beside `~/dev/sift`) and depen
 | Manifest | `HUDManifest`, `HUDManifest.Panel`, `HUDSize`, `HUDManifestScanner` |
 | Contract | `HUDPanelHost`, `HUDControlRouter`, `HUDPanelState`, `HUDPanelMode`, `HUDControlError`, `HUDPanelTransition`, `HUDDrop` |
 | Dock | `HUDDockPosition`, `HUDDockLayout`, `HUDDockAxis`, `HUDDockAlignment`, `HUDDockRegistry`, `HUDDockStyle`, `HUDDockPlacement`, `HUDDockStripView` / `HUDDockStrip`, `HUDDockTile`, `HUDDockItem` |
-| Chrome | `HUDGlassView`, `HUDGlass` / `.hudGlass()`, `HUDGlossView`, `HUDPanelWindow` |
+| Chrome | `HUDGlassView`, `HUDGlass` / `.hudGlass()`, `HUDGlossView`, `HUDSoftBackdropView`, `HUDPanelWindow` |
 | Motion | `HUDSpring`, `HUDAnimation`, `HUDParking`, `HUDEdge` |
 | Notch | `HUDNotchGeometry`, `HUDFullscreenObserver`, `HUDScreenSnapshot`, `HUDWindowSnapshot` |
 | Spaces and screens | `HUDEnvironmentMonitor` |
@@ -92,6 +92,24 @@ on, or with `material: .visualEffect`, the backdrop is an `NSVisualEffectView` (
 cut to the same shape, with no tint. Styles: `.panel`,
 `.strip`, `.plain`, or your own `Style(cornerRadius:borderWidth:borderAlpha:gloss:material:)`.
 Add content with `addSubview`. In SwiftUI: `content.hudGlass(.strip)`.
+
+`HUDSoftBackdropView` is a backdrop whose edge fades out instead of ending in a line (a radial
+menu's field): a Gaussian blur of what is behind the window, radius 25 unless `blurRadius` says
+otherwise, shown through `field`, an alpha image stretched over the bounds, with an optional
+`tint` drawn through the same field. Any shape and fade is one view in one window. It is an
+`NSVisualEffectView` (`.hudWindow`, behind the window) masked by the field, whose backdrop layer
+HUDKit gives one Gaussian blur in place of AppKit's filters, with the material's fill, tone and
+tint layers hidden; the backdrop layer and the filter are private (`CABackdropLayer`,
+`CAFilter`), found by name at run time and checked before anything is set. AppKit puts its own
+filters back (on an appearance change, it builds the material again); the view checks at the
+end of each of AppKit's updates of the material, after layout, a move to a window and the
+settled signal, and puts the blur back, so the window shows the blur from its first frame with
+no call from its owner. Where a private piece is missing or the blur does not stay, and while
+Reduce transparency is on, it is the system's own material through the same field. `path` and
+`pathReason` say which and why; each choice, and each episode of putting the blur back, is
+logged under subsystem `xyz.machud.hudkit`, category `softbackdrop`. Put it under the content of
+a window that is not opaque, and keep `HUDGlassView` out of that window: the glass's blur
+covers everything the window draws, so it would end in a line where the field fades out.
 
 `HUDPanelWindow(contentRect:keyable:level:)` is the borderless, non-activating, floating,
 all-Spaces hover panel; `HUDPanelWindow(contentRect:behavior: .windowed)` is the same glass as a
