@@ -59,8 +59,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   memory: each model call frees its buffers as it returns.
 
 ### Added
-- Each wake hands the app the last 2.5 seconds of audio the wake word heard, with how many
-  frames fired and their best score (`WakeDetection.audio`, `frames`, `peak`), so the app can
+- Each wake hands the app the last 2.5 seconds of audio the wake word heard
+  (`WakeListener.heardSamples`, 40,000 samples at 16 kHz, is the most it hands over), with how
+  many frames fired and their best score (`WakeDetection.audio`, `frames`, `peak`), so the app can
   transcribe it and confirm the phrase was really said before acting on it. The audio is
   handed over once and not kept. On a false wake it is whatever was said in the room, so the
   app transcribes it on the Mac and never keeps, logs or sends it; printing or logging a wake
