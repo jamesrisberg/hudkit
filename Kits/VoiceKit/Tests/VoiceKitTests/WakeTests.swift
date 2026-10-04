@@ -507,9 +507,10 @@ struct RealWakeModelTests {
         let silence = [Float](repeating: 0, count: 16_000)
         let audio = silence + speech + silence
         var scores: [Float] = []
-        for start in stride(from: 0, to: audio.count - 1280, by: 1280) {
+        for start in stride(from: 0, through: audio.count - 1280, by: 1280) {
             scores.append(try await engine.score(Array(audio[start..<(start + 1280)])))
         }
+        #expect(scores.count == audio.count / 1280)
         let peak = scores.max() ?? 0
         #expect(peak > 0.95, "scores: \(scores)")
         #expect(scores.firstIndex { $0 >= 0.5 }.map { (20...24).contains($0) } == true, "scores: \(scores)")
