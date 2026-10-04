@@ -263,6 +263,28 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         XCTAssertTrue(repairs.isEmpty, "\(logs)")
     }
 
+    func testReduceTransparencyBeforeItsNotificationLeavesTheMaterialToAppKit() throws {
+        var reduced = false
+        let w = window()
+        let view = soft(in: w, transparency: HUDTransparencySetting(isReduced: { reduced }, center: NotificationCenter()))
+        w.orderFrontRegardless()
+        XCTAssertTrue(waitUntil { isBlurred(view.effectView) })
+        clock.advance(by: 0)
+        // The setting is on and AppKit has put its own material back before the notification arrives.
+        reduced = true
+        let backdrop = try XCTUnwrap(backdropLayer(view.effectView))
+        backdrop.filters = nil
+        backdrop.superlayer?.sublayers?.first { $0.name == "fill" }?.isHidden = false
+        monitor.note(.activeSpace)
+        clock.advance(by: HUDEnvironmentMonitor.defaultSettleDelay)
+        XCTAssertEqual(backdrop.filters?.count ?? 0, 0, "the blur is not put back while the setting is on")
+        XCTAssertTrue(repairs.isEmpty, "\(logs)")
+        clock.advance(by: 0)
+        XCTAssertEqual(view.path, .systemMaterial, "the setting is followed without its notification")
+        XCTAssertEqual(view.pathReason, "Reduce transparency is on; the system makes its material opaque")
+        XCTAssertFalse(try XCTUnwrap(view.effectView).tunes)
+    }
+
     func testANewRadiusIsPutOnTheBackdropLayer() {
         let w = window()
         let view = soft(in: w)
