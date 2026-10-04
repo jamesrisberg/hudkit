@@ -14,7 +14,7 @@ import QuartzCore
 ///
 /// `path` says how it draws and `pathReason` why. Each new path or reason is logged once while
 /// the view is in a window (subsystem `xyz.machud.hudkit`, category `softbackdrop`):
-/// - `.familyBlur`: an `NSVisualEffectView` (`.hudWindow`, behind the window) masked by the
+/// - `.blur`: an `NSVisualEffectView` (`.hudWindow`, behind the window) masked by the
 ///   field, whose backdrop layer has one Gaussian blur of `blurRadius` in place of AppKit's
 ///   filters, with the material's fill, tone and tint layers hidden. The backdrop layer (the
 ///   private `CABackdropLayer`, found by class name) and the filter (the private `CAFilter`, by
@@ -41,7 +41,7 @@ public final class HUDSoftBackdropView: NSView {
     /// How the view draws.
     public enum Path: String, Sendable {
         /// A Gaussian blur of `blurRadius` of what is behind the window, through the field.
-        case familyBlur
+        case blur
         /// The system's own behind-window material, through the field.
         case systemMaterial
         /// Nothing: there is no field.
@@ -155,7 +155,7 @@ public final class HUDSoftBackdropView: NSView {
             guard filter != nil else {
                 return (.systemMaterial, "no Gaussian blur filter of radius \(Self.format(blurRadius)) could be made")
             }
-            return (.familyBlur, "one Gaussian blur of radius \(Self.format(blurRadius)) on the material's backdrop layer")
+            return (.blur, "one Gaussian blur of radius \(Self.format(blurRadius)) on the material's backdrop layer")
         }
     }
 
@@ -168,7 +168,7 @@ public final class HUDSoftBackdropView: NSView {
             tintView?.removeFromSuperview()
             tintView = nil
         } else {
-            let tunes = next == .familyBlur
+            let tunes = next == .blur
             if effectView?.tunes != tunes {
                 effectView?.removeFromSuperview()
                 let effect = HUDSoftBackdropEffectView(frame: bounds, tunes: tunes)
@@ -238,7 +238,7 @@ public final class HUDSoftBackdropView: NSView {
     /// Looks at the effect view's backdrop layer and puts the blur back where AppKit's own
     /// filters or layers are found. Cheap when nothing changed.
     private func check(_ trigger: String) {
-        guard path == .familyBlur, failure == nil, let effect = effectView, effect.tunes, let filter,
+        guard path == .blur, failure == nil, let effect = effectView, effect.tunes, let filter,
               case .success(let pieces) = pieces else { return }
         // The setting may have changed before its notification arrived; leave the material to
         // AppKit and follow the setting on the next turn.

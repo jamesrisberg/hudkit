@@ -63,7 +63,7 @@ final class HUDSoftBackdropViewTests: XCTestCase {
     func testWithThePrivatePiecesTheBlurIsChosen() throws {
         let view = soft()
         view.field = centreField(frame.size)
-        XCTAssertEqual(view.path, .familyBlur)
+        XCTAssertEqual(view.path, .blur)
         XCTAssertTrue(view.pathReason.contains("radius 25"), view.pathReason)
         XCTAssertEqual(view.blurRadius, 25, "the family's radius")
         let effect = try XCTUnwrap(view.effectView)
@@ -85,7 +85,7 @@ final class HUDSoftBackdropViewTests: XCTestCase {
         view.tint = .black
         XCTAssertTrue(view.subviews.isEmpty, "a tint needs a field")
         view.field = centreField(frame.size)
-        XCTAssertEqual(view.path, .familyBlur)
+        XCTAssertEqual(view.path, .blur)
         XCTAssertEqual(view.subviews.count, 2)
         view.field = nil
         XCTAssertEqual(view.path, .none)
@@ -141,7 +141,7 @@ final class HUDSoftBackdropViewTests: XCTestCase {
         XCTAssertFalse(stock.tunes)
         reduced = false
         center.post(name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil)
-        XCTAssertEqual(view.path, .familyBlur)
+        XCTAssertEqual(view.path, .blur)
         let tuned = try XCTUnwrap(view.effectView)
         XCTAssertTrue(tuned.tunes)
         XCTAssertNil(stock.superview, "a fresh effect view for the other path")
@@ -156,7 +156,7 @@ final class HUDSoftBackdropViewTests: XCTestCase {
         let view = soft()
         view.field = centreField(frame.size)
         view.blurRadius = 12.5
-        XCTAssertEqual(view.path, .familyBlur)
+        XCTAssertEqual(view.path, .blur)
         XCTAssertTrue(view.pathReason.contains("radius 12.5"), view.pathReason)
     }
 

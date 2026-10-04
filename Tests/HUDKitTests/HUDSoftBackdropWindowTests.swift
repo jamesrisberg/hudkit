@@ -126,9 +126,9 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         }, "AppKit built the material")
         XCTAssertFalse(sawAppKitsOwn, "the material was never seen with AppKit's filters")
         XCTAssertTrue(isBlurred(view.effectView))
-        XCTAssertEqual(view.path, .familyBlur)
+        XCTAssertEqual(view.path, .blur)
         XCTAssertEqual(logs.count, 1, "\(logs)")
-        XCTAssertTrue(logs.first?.contains("familyBlur: one Gaussian blur of radius 25") == true, "\(logs)")
+        XCTAssertTrue(logs.first?.contains(": blur: one Gaussian blur of radius 25") == true, "\(logs)")
         XCTAssertTrue(repairs.isEmpty, "the first application is no repair")
         // Ordered out and in again: AppKit keeps the layers, and the blur on them.
         w.orderOut(nil)
@@ -161,7 +161,7 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         clock.advance(by: HUDSoftBackdropView.repairEpisodeGap)
         w.appearance = NSAppearance(named: .aqua)
         XCTAssertTrue(waitUntil { repairs.count == 2 && isBlurred(view.effectView) }, "\(logs)")
-        XCTAssertEqual(view.path, .familyBlur)
+        XCTAssertEqual(view.path, .blur)
     }
 
     func testTheBlurSurvivesAResizeAndTheMaskFollows() throws {
@@ -216,7 +216,7 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         let pieces = HUDSoftBackdropPieces.resolve { $0 == "CABackdropLayer" ? NotAppKitsBackdrop.self : NSClassFromString($0) }
         let w = window()
         let view = soft(in: w, pieces: pieces)
-        XCTAssertEqual(view.path, .familyBlur, "nothing to tell before AppKit builds the material")
+        XCTAssertEqual(view.path, .blur, "nothing to tell before AppKit builds the material")
         let first = try XCTUnwrap(view.effectView)
         w.orderFrontRegardless()
         XCTAssertTrue(waitUntil { backdropLayer(first) != nil })
@@ -259,7 +259,7 @@ final class HUDSoftBackdropWindowTests: XCTestCase {
         XCTAssertTrue(waitUntil { isBlurred(view.effectView) })
         guard logs.count == 3 else { return XCTFail("three lines: \(logs)") }
         XCTAssertTrue(logs[1].contains("wheel in window \(w.windowNumber)") && logs[1].contains("systemMaterial: Reduce transparency"), logs[1])
-        XCTAssertTrue(logs[2].contains("familyBlur"), logs[2])
+        XCTAssertTrue(logs[2].contains(": blur: "), logs[2])
         XCTAssertTrue(repairs.isEmpty, "\(logs)")
     }
 
