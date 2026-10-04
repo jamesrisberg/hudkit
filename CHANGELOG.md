@@ -59,6 +59,10 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   handed over once and not kept. On a false wake it is whatever was said in the room, so the
   app transcribes it on the Mac and never keeps, logs or sends it; printing or logging a wake
   shows only how much audio it holds.
+- An app that refuses a wake (the phrase was not in what it heard) can ask the wake word to
+  ignore what it hears for a moment when it listens again (`quietFor:` on `WakeListener.rearm`
+  and `start`), so the rest of the refused sound is not scored again. Nothing is ignored unless
+  the app asks.
 - `TriggerPhrase.transcript(_:contains:)`: whether a transcript contains a phrase, its words
   together and in order as whole words, ignoring case, accents, punctuation and the words
   around it.

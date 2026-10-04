@@ -149,6 +149,25 @@ struct WakeDetectionTests {
     }
 }
 
+/// Counts the frames a wrapped engine has scored.
+final class CountingWakeEngine: WakeScoringEngine, @unchecked Sendable {
+    private let engine: WakeScoringEngine
+    private let lock = NSLock()
+    private var count = 0
+
+    init(_ engine: WakeScoringEngine) { self.engine = engine }
+
+    var frameCount: Int { lock.withLock { count } }
+
+    func reset() async throws { try await engine.reset() }
+
+    func score(_ frame: [Float]) async throws -> Float {
+        let value = try await engine.score(frame)
+        lock.withLock { count += 1 }
+        return value
+    }
+}
+
 /// Pushes `samples` in 100 ms chunks at a microphone's pace: each chunk is scored before the next
 /// one is pushed. Counts frames from a fresh arm. With `done`, it stops pushing once that holds
 /// and returns only when it does: a frame is scored before the listener acts on its score.
@@ -327,6 +346,85 @@ struct WakeListenerTests {
         #expect(wakes.map(\.audio) == [after])
     }
 
+    @Test func nothingIsDroppedUnlessAQuietPeriodIsAskedFor() async throws {
+        let engine = ScriptedWakeEngine()
+        engine.setNext(0.95)  // a sound that keeps scoring
+        let source = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: engine, phrase: "x", model: "x"), source: source, frames: 2,
+            now: { 100 })
+        var wakes = 0
+        listener.onWake = { _ in wakes += 1 }
+        await listener.start()
+        source.push(2560)
+        try await eventually { wakes == 1 }
+        // Re-armed or restarted after a wake, it scores at once.
+        await listener.rearm()
+        source.push(2560)
+        try await eventually { wakes == 2 }
+        await listener.stop()
+        await listener.start()
+        source.push(2560)
+        try await eventually { wakes == 3 }
+        // A quiet period that is not a positive number of seconds drops nothing.
+        await listener.rearm(quietFor: -1)
+        source.push(2560)
+        try await eventually { wakes == 4 }
+        await listener.rearm(quietFor: .nan)
+        source.push(2560)
+        try await eventually { wakes == 5 }
+        #expect(engine.frameCount == 10)
+    }
+
+    @Test func aQuietPeriodIsNeitherScoredNorKept() async throws {
+        let engine = ScriptedWakeEngine()
+        let source = FakeAudioSource()
+        var now: TimeInterval = 100
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: engine, phrase: "x", model: "x"), source: source, frames: 2,
+            now: { now })
+        var wakes: [WakeDetection] = []
+        listener.onWake = { wakes.append($0) }
+        await listener.start()
+        engine.push([0.9, 0.9])
+        try await feed(numbered(2560), to: source, scoredFrames: { engine.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.count == 1)
+
+        // Counted from when listening resumes, not from the wake.
+        now += 0.8
+        await listener.rearm(quietFor: 1)
+        now += 0.9
+        source.onSamples?(numbered(2560, from: 10_000))
+        for _ in 0..<20 { await Task.yield() }
+        #expect(engine.frameCount == 2, "not scored")
+        #expect(listener.state == .listening)
+        now += 0.1
+        engine.push([0.9, 0.9])
+        let after = numbered(2560, from: 20_000)
+        try await feed(after, to: source, scoredFrames: { engine.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.count == 2)
+        #expect(wakes.last?.audio == after, "nothing from the quiet period is handed over")
+
+        // The same when starting.
+        await listener.stop()
+        await listener.start(quietFor: 1)
+        now += 0.5
+        source.push(2560)
+        for _ in 0..<20 { await Task.yield() }
+        #expect(engine.frameCount == 4)
+        now += 0.5
+        engine.push([0.9, 0.9])
+        source.push(2560)
+        try await eventually { wakes.count == 3 }
+
+        // Re-arming without one ends a quiet period.
+        await listener.rearm(quietFor: 1)
+        await listener.rearm()
+        engine.push([0.9, 0.9])
+        source.push(2560)
+        try await eventually { wakes.count == 4 }
+    }
+
     @Test func badAudioOrASourceFailureStopsListening() async throws {
         let source = FakeAudioSource()
         let listener = WakeListener(
@@ -432,6 +530,24 @@ struct RealWakeModelTests {
         #expect(detection.frames == 2)
         #expect(detection.score == Double(scores[first + 1]), "scores: \(scores)")
         #expect(detection.peak == Double(max(scores[first], scores[first + 1])))
+
+        // Through the listener, the phrase wakes it as soon as it starts and as soon as it is
+        // re-armed: nothing is dropped unless the host asks for a quiet period.
+        let counting = CountingWakeEngine(try OpenWakeWordEngine(model: model, directory: directory))
+        let microphone = FakeAudioSource()
+        let listener = WakeListener(
+            detector: InProcessWakeDetector(engine: counting, phrase: model.phrase, model: model.id),
+            source: microphone, threshold: threshold, frames: frames, now: { 0 })
+        var wakes: [WakeDetection] = []
+        listener.onWake = { wakes.append($0) }
+        let phrase = speech + silence
+        await listener.start()
+        try await feed(phrase, to: microphone, scoredFrames: { counting.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.count == 1, "the phrase at once after starting")
+        await listener.rearm()
+        try await feed(phrase, to: microphone, scoredFrames: { counting.frameCount }, until: { listener.state == .woke })
+        #expect(wakes.count == 2, "the phrase at once after re-arming")
+        await listener.stop()
 
         // A non-finite sample is an error, not a crash.
         await #expect(throws: WakeDetectorError.self) {

@@ -19,6 +19,11 @@ public protocol WakeAudioSource: AnyObject {
 /// Each wake carries the last `heardSamples` (2.5 s) of the audio the listener fed the detector
 /// since it was armed, so the host can transcribe it and confirm the phrase. It is handed to
 /// `onWake` once and not kept; stopping, failing or re-arming drops it.
+///
+/// A host that listens again after a wake it refused or could not confirm can ask for a quiet
+/// period (`quietFor:` on `rearm` and `start`): audio that arrives in it is neither scored nor
+/// kept, so the rest of the refused sound is not scored again. Without one, nothing is dropped. A
+/// sound-alike that keeps playing past the quiet period can wake it again.
 @MainActor
 public final class WakeListener {
     public enum Failure: LocalizedError {
@@ -47,9 +52,12 @@ public final class WakeListener {
 
     private let detector: WakeDetector
     private let source: WakeAudioSource
+    private let now: @MainActor () -> TimeInterval
     private var threshold: Double
     private var frames: Int
     private var heard = SampleRing(capacity: WakeListener.heardSamples)
+    /// Audio that arrives before this (by `now`) is dropped: the quiet period a host asked for.
+    private var quietUntil = -TimeInterval.infinity
     private var backlog: [[Float]] = []
     private var backlogSamples = 0
     private var draining = false
@@ -61,15 +69,18 @@ public final class WakeListener {
     /// - Parameters:
     ///   - threshold: the score a frame must reach (`VoiceSettings.wakeThreshold`).
     ///   - frames: the consecutive frames at or above it that make a wake (`VoiceSettings.wakeFrames`).
-    public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5, frames: Int) {
+    ///   - now: seconds on a monotonic clock, for a quiet period.
+    public init(detector: WakeDetector, source: WakeAudioSource, threshold: Double = 0.5, frames: Int,
+                now: @escaping @MainActor () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
         self.detector = detector
         self.source = source
         self.threshold = threshold
         self.frames = frames
+        self.now = now
     }
 
-    /// Arms the detector, then starts the source.
-    public func start() async {
+    /// Arms the detector, then starts the source. `quietFor`: as for `rearm`.
+    public func start(quietFor: TimeInterval = 0) async {
         guard state == .idle || isFailed else { return }
         let token = UUID()
         generation = token
@@ -91,7 +102,7 @@ public final class WakeListener {
                 if sourceStartsInFlight == 1, state != .listening, state != .woke { source.stop() }
                 return
             }
-            state = .listening
+            listen(quietFor: quietFor)
         } catch {
             guard generation == token else { return }
             fail(error)
@@ -100,7 +111,11 @@ public final class WakeListener {
 
     /// Listens for the next wake after one was reported, optionally with a new threshold or
     /// frame count. Ignored while arming, so overlapping calls arm once.
-    public func rearm(threshold: Double? = nil, frames: Int? = nil) async {
+    ///
+    /// `quietFor` seconds of audio, counted from when listening resumes, are neither scored nor
+    /// kept: a host asks for this when it listens again after a wake it refused or could not
+    /// confirm. The default, 0 (or any value that is not a positive number), drops nothing.
+    public func rearm(threshold: Double? = nil, frames: Int? = nil, quietFor: TimeInterval = 0) async {
         guard state == .woke || state == .listening else { return }
         if let threshold { self.threshold = threshold }
         if let frames { self.frames = frames }
@@ -112,7 +127,7 @@ public final class WakeListener {
         do {
             info = try await detector.arm(threshold: self.threshold, frames: self.frames)
             guard generation == token else { return }
-            state = .listening
+            listen(quietFor: quietFor)
         } catch {
             guard generation == token else { return }
             fail(error)
@@ -133,6 +148,11 @@ public final class WakeListener {
         return false
     }
 
+    private func listen(quietFor: TimeInterval) {
+        quietUntil = quietFor.isFinite && quietFor > 0 ? now() + quietFor : -.infinity
+        state = .listening
+    }
+
     /// The audio waiting for the detector and the audio it heard both belong to the arm that is
     /// ending.
     private func dropAudio() {
@@ -151,7 +171,7 @@ public final class WakeListener {
     }
 
     private func receive(_ samples: [Float], token: UUID) {
-        guard generation == token, state == .listening else { return }
+        guard generation == token, state == .listening, now() >= quietUntil else { return }
         backlog.append(samples)
         backlogSamples += samples.count
         if backlogSamples > Self.maximumBacklogSamples {

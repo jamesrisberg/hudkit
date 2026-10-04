@@ -56,6 +56,12 @@ The listener keeps none of it after the hand-over, and stopping, failing or re-a
 what it heard. A `WakeDetection` prints, debug-prints and reflects only the audio's sample
 count, so logging one does not write the audio out.
 
+A host that listens again after a wake it refused or could not confirm can ask for a quiet
+period: `rearm(quietFor:)` and `start(quietFor:)` drop the audio that arrives in that many
+seconds from when listening resumes, neither scored nor kept, so the rest of the refused sound
+is not scored again. The default, 0, drops nothing; a sound-alike that keeps playing past the
+quiet period can wake it again. The listener's clock is injectable (`now:`).
+
 `InProcessWakeDetector` scores 80 ms frames (1280 samples) with a `WakeScoringEngine`: one
 detection per arm, a threshold in 0.05...0.95, and any error disarms it. It wakes when
 `frames` (1...4) consecutive frames score at or above the threshold; a frame below it
