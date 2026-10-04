@@ -198,9 +198,11 @@ private final class HUDBackdropEffectView: NSVisualEffectView {
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// The tint of a `.mask` backdrop: `color` where the mask image is opaque, stretched over the
-/// bounds as `NSVisualEffectView.maskImage` is.
-private final class HUDBackdropMaskTint: NSView {
+/// A tint drawn through a mask image: `color` times the image's alpha, the image stretched over
+/// the bounds as `NSVisualEffectView.maskImage` is. The tint of a `.mask` backdrop and of
+/// `HUDSoftBackdropView`. It is drawn again when the mask, the colour or the size changes, and
+/// AppKit draws it again when the appearance changes, so a dynamic colour follows it.
+final class HUDBackdropMaskTint: NSView {
     var mask: NSImage? { didSet { if mask !== oldValue { needsDisplay = true } } }
     var color: NSColor = .clear { didSet { if color != oldValue { needsDisplay = true } } }
 

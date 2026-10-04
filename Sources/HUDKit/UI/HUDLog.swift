@@ -13,6 +13,9 @@ enum HUDLog {
     static let presence = Logger(subsystem: subsystem, category: "presence")
     /// Each change of a screen's full-screen result, with the window that satisfied the test.
     static let fullscreen = Logger(subsystem: subsystem, category: "fullscreen")
+    /// How each soft backdrop (`HUDSoftBackdropView`) draws and why, when that is chosen, and
+    /// each episode of putting its blur back after AppKit replaced it.
+    static let softBackdrop = Logger(subsystem: subsystem, category: "softbackdrop")
 
     /// A rect as `x,y,w,h` in whole points.
     static func format(_ rect: CGRect) -> String {
