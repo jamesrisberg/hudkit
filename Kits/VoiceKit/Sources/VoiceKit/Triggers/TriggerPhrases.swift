@@ -37,6 +37,35 @@ public struct TriggerPhrase: Codable, Hashable, Sendable {
         words(text).joined(separator: " ")
     }
 
+    /// Whether `transcript` contains `phrase`: the phrase's words next to each other and in order,
+    /// as whole words, with any words before and after them; nothing else. Here punctuation
+    /// separates words as a space does, so it is ignored between and around them: "Hey. Jarvis",
+    /// "Hey-Jarvis" and "hey jarvis'" contain "Hey Jarvis" (transcribers punctuate a pause, a
+    /// sentence end included). Words run together or split apart do not: "heyjarvis", "hey jar
+    /// vis", "they jarvis" and "hey jarvisson" do not contain it, nor does "heyday" contain "Hey
+    /// Day". Each word is compared as `normalize` compares it (case and accents ignored). A phrase
+    /// with no words is in no transcript.
+    ///
+    /// Unlike `TriggerPhraseRegistry.match(transcript:)`, which finds a registered phrase only at
+    /// the start of a transcript and returns the words after it, this finds one given phrase
+    /// anywhere and only says whether it is there.
+    public static func transcript(_ transcript: String, contains phrase: String) -> Bool {
+        let target = spokenWords(phrase)
+        guard !target.isEmpty else { return false }
+        let spoken = spokenWords(transcript)
+        guard spoken.count >= target.count else { return false }
+        return (0...(spoken.count - target.count)).contains { spoken[$0..<($0 + target.count)].elementsEqual(target) }
+    }
+
+    /// `words`, with punctuation separating words as whitespace does.
+    static func spokenWords(_ text: String) -> [String] {
+        var spaced = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            spaced.append(CharacterSet.alphanumerics.contains(scalar) ? scalar : " ")
+        }
+        return words(String(spaced))
+    }
+
     static func words(_ text: String) -> [String] {
         text.split(whereSeparator: \.isWhitespace).map(normalizeWord).filter { !$0.isEmpty }
     }

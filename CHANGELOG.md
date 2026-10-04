@@ -53,6 +53,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   strip shows it on screen: only on the slab, never outside its edge.
 
 ### Added
+- `TriggerPhrase.transcript(_:contains:)`: whether a transcript contains a phrase, its words
+  together and in order as whole words, ignoring case, accents, punctuation and the words
+  around it.
 - Diagnostics in the unified log (`log show --predicate 'subsystem == "xyz.machud.hudkit"'`):
   category `presence` names every HUD window HUDKit had to put back and what was wrong with it,
   and a window the system keeps reporting somewhere other than where it belongs (logged only,

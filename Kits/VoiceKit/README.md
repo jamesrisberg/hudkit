@@ -79,6 +79,14 @@ identifier the host resolves, such as a `machud` command). It does not know how 
 heard: `action(forPhrase:)` takes the phrase a wake model reports, `match(transcript:)` finds
 the phrase a transcript opens with (whole words, longest first) and returns the words after
 it. Phrases compare normalized: case, accents and punctuation are ignored.
+`TriggerPhrase.transcript(_:contains:)` says whether one phrase was spoken anywhere in a
+transcript: the phrase's words next to each other and in order, as whole words, with any words
+before and after them ("okay, hey Jarvis, what time is it" contains "Hey Jarvis"; "hey Javier",
+"Jarvis", "hey there Jarvis" and "they Jarvis" do not). Punctuation counts as a space here, so
+it is ignored between and around the words, a sentence end included ("Hey. Jarvis",
+"Hey-Jarvis"), since transcribers punctuate a pause. Words run together or split apart are not
+the phrase ("heyjarvis", "hey jar vis"). Each word compares as `normalize` compares it. Unlike
+`match(transcript:)` it looks anywhere, not only at the start, and returns no remainder.
 `TriggerPhraseRegistry.standard` maps "Hey Computer" to `.agentTurn`. The registry encodes as a
 plain JSON list of `{phrase, action}`.
 
