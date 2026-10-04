@@ -7,13 +7,14 @@ import SwiftUI
 /// window server's blur of what is behind the window (`HUDWindowBlur`, set on the window while
 /// the view is in it) under a tint the view draws in its shape: black at 20 % in a dark
 /// appearance, white at 20 % in a light one. The shape is the style's rounded rect, or the
-/// opaque part of `maskImage` when one is set. Where the window server's call is missing, or
-/// the style asks for `.visualEffect`, the backdrop is an `NSVisualEffectView` (`.hudWindow`)
-/// cut to the same shape.
+/// opaque part of `maskImage` when one is set. Where the window server's call is missing,
+/// Reduce transparency is on, or the style asks for `.visualEffect`, the backdrop is an
+/// `NSVisualEffectView` (`.hudWindow`) cut to the same shape.
 open class HUDGlassView: NSView {
     public enum Material: Sendable {
         /// The window server's blur of what is behind the window, under a tint
-        /// (`HUDWindowBlur`); `.visualEffect` where that call is missing.
+        /// (`HUDWindowBlur`); `.visualEffect` where that call is missing or Reduce transparency
+        /// is on.
         case windowBlur
         /// Always `NSVisualEffectView(.hudWindow)`, with no tint.
         case visualEffect
