@@ -570,8 +570,9 @@ window server shows it on screen is logged once and not tried again. A window ba
 after a failed attempt is logged with the number of attempts; ordering it out and in starts
 afresh. A healthy window is never touched. A window the window server reports away from its frame is only logged, never
 moved: the server reports every all-Spaces window shifted while a Space switch is in flight, so
-it is logged only when it is still shifted by the same amount 0.5 s later and the other HUD
-windows of the app on that screen are not shifted with it. Each repair and report is logged:
+it is logged only when it is still shifted by the same amount 0.5 s later, and not when two or
+more HUD windows of the app on that screen are all shifted by one common amount (a swipe held
+in place). Each repair and report is logged:
 `log show --predicate 'subsystem == "xyz.machud.hudkit"'` (category `presence`) names the window
 (its class, then the first of `panelID`, `identifier`, title and accessibility label, and its
 window number) and what was wrong. The log is public (not redacted), so keep user content out of

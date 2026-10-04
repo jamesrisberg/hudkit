@@ -26,11 +26,15 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   frames in a row (the new voice setting `wakeFrames`, 1 to 4), so a real "Hey Jarvis" wakes
   about 80 ms later than before. On 14.7 hours of recorded dictation this halves the false
   wakes (4 to 2). For apps built on VoiceKit: `WakeDetector.arm(threshold:frames:)` replaces
-  `arm(threshold:)`, and `WakeListener` needs `frames`.
+  `arm(threshold:)`, and `WakeListener` needs `frames`. `InProcessWakeDetector.arm` throws the new
+  `WakeDetectorError.invalidFrames` for a count outside `InProcessWakeDetector.framesRange`
+  (1 to 4, also `VoiceSettings.wakeFramesRange`), so a `switch` over `WakeDetectorError` that
+  lists every case stops compiling until it handles the new one.
 
 ### Removed
 - `HUDGlassView.Material.automatic`, `HUDGlassView.usesLiquidGlass`,
-  `HUDDockStripView.usesLiquidGlass` and `HUDDockStyle.fallbackMaterial`.
+  `HUDDockStripView.usesLiquidGlass` and `HUDDockStyle.fallbackMaterial`, which also takes the
+  `fallbackMaterial:` parameter out of `HUDDockStyle.init`: a call that passes it stops compiling.
 
 ### Fixed
 - The tool dock no longer shows white splotches while you switch desktops.
@@ -39,7 +43,7 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 - HUD windows that stay on screen for a long time (the voice orb, the tool dock, parking orbs,
   widgets) no longer go missing from a desktop. After a desktop switch, sleep and wake, or a
   display change, HUDKit checks each one and puts back any the system dropped from the desktop
-  you are looking at, within about a second. Windows that are fine are left alone. A window that
+  you are looking at, within a second or two. Windows that are fine are left alone. A window that
   does not come back at once (a wake still in progress, a widget on a Split View desktop) is
   tried again at most every 30 seconds while it stays hidden, and the log says when it is back.
 - Switching desktops or waking the Mac no longer resets every widget's window in the middle of
@@ -55,8 +59,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   memory: each model call frees its buffers as it returns.
 
 ### Added
-- Each wake hands the app the last 2.5 seconds of audio the wake word heard, with how many
-  frames fired and their best score (`WakeDetection.audio`, `frames`, `peak`), so the app can
+- Each wake hands the app the last 2.5 seconds of audio the wake word heard
+  (`WakeListener.heardSamples`, 40,000 samples at 16 kHz, is the most it hands over), with how
+  many frames fired and their best score (`WakeDetection.audio`, `frames`, `peak`), so the app can
   transcribe it and confirm the phrase was really said before acting on it. The audio is
   handed over once and not kept. On a false wake it is whatever was said in the room, so the
   app transcribes it on the Mac and never keeps, logs or sends it; printing or logging a wake
@@ -77,7 +82,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   change has settled (`HUDEnvironmentMonitor.shared.observeSettled { change in }`, with
   `Change` and `Observation`).
 - `HUDFullscreenObserver.evidence(screenID:)` and `evidenceByScreenID`: the window that made a
-  screen count as full screen; `recheckInterval`. `HUDWindowSnapshot.windowID` and `alpha`.
+  screen count as full screen. `HUDFullscreenObserver.recheckInterval` (default
+  `defaultRecheckInterval`, 2 s): how often a screen reported full screen is checked again.
+  `HUDWindowSnapshot.windowID` and `alpha`.
 - `HUDSoftBackdropView`: a backdrop whose edge fades out instead of ending in a line, for a
   field such as a radial menu's. It shows a Gaussian blur of what is behind the window (radius
   25, `blurRadius`) through `field`, an alpha image stretched over the view, with an optional
