@@ -32,9 +32,9 @@ import QuartzCore
 /// layout, an appearance change and a move to a window, and once a Space switch, wake or screen
 /// change has settled (`HUDEnvironmentMonitor`). Where it finds AppKit's filters or layers it
 /// puts the blur back and logs that once per episode (repairs less than `repairEpisodeGap`
-/// apart are one episode); more than `repairLimit` repairs in one episode give the blur up. So a
-/// window shows the blur from its first frame, with nothing for its owner to call before
-/// showing it.
+/// apart are one episode). So a window shows the blur from its first frame, with nothing for its
+/// owner to call before showing it. More than `repairLimit` repairs in one episode give the blur
+/// up.
 ///
 /// The field is copied once when it is set, to stretch rather than tile; AppKit draws the
 /// effect view's mask, and the view its tint, at the bounds' size when that changes.
@@ -398,7 +398,7 @@ final class HUDSoftBackdropEffectView: NSVisualEffectView {
 
 /// Puts one filter of ours on a material's backdrop layer in place of AppKit's, hides the
 /// material's other layers (fill, tone, tint), and says what it found. Where either does not
-/// hold, it leaves the material as AppKit had it.
+/// hold, it leaves the material as it found it.
 enum HUDSoftBackdropTuner {
     enum Outcome: Equatable {
         /// The material's layers are not there: the view has not been on screen yet, or AppKit

@@ -62,9 +62,10 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   field such as a radial menu's. It shows a Gaussian blur of what is behind the window (radius
   25, `blurRadius`) through `field`, an alpha image stretched over the view, with an optional
   `tint` drawn through the same field, and has the blur from the window's first frame. While
-  Reduce transparency is on, or where the private pieces it uses are missing, it shows the
-  system's own material through the field. `path` and `pathReason` say which and why; the
-  choice, and each time it had to put the blur back, are logged under category `softbackdrop`.
+  Reduce transparency is on, where the private pieces it uses are missing, where the blur does
+  not stay, or where the system keeps putting its own material back, it shows the system's own
+  material through the field. `path` and `pathReason` say which and why; the choice, and each
+  time it had to put the blur back, are logged under category `softbackdrop`.
 
 ## [0.3.1] - 2026-10-02
 
