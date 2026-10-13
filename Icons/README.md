@@ -28,6 +28,7 @@ Wormhole and Archibald keep their own icons.
 | `magickhud.svg` | magickHUD | `#F472D0` magenta | a wand with a four-point sparkle at its tip |
 | `servershud.svg` | serversHUD | `#2DD4BF` teal | a rack of three server slabs, each with a lit dot |
 | `widgethud.svg` | widgetHUD | `#60A5FA` sky blue | a wide tile over two small ones: a board of widgets |
+| `usagehud.svg` | UsageHUD | `#A3E635` lime | three quarters of a gauge dial, its needle past the middle |
 | `template.svg` | new apps | `#9CA3AF` grey | a ring with a dot: the placeholder the app template ships |
 
 ## Rendering
