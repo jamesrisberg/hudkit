@@ -305,10 +305,10 @@ family; nothing else is involved in updating.
 
 `kind` is `umbrella` (MacHUD), `hover` or `windowed` (the manifest's first panel). `bundled`
 marks the tools MacHUD offers to install by default: every hover app; the windowed apps (Sift,
-existing entry, then from the app repo (Info.plist, `machud.json`, the GitHub description); it
-edits a temporary worktree of machud at `origin/main`, commits `Catalog: <Name> <version>` and
-pushes, so a machud checkout with work in progress is untouched. `hud-catalog.sh hudkit <v>`
-sets the HUDKit version; `show` prints the published file.
+what it is not given from the existing entry, then from the app repo (Info.plist, `machud.json`,
+the GitHub description); it edits a temporary worktree of machud at `origin/main`, commits
+`Catalog: <Name> <version>` and pushes, so a machud checkout with work in progress is untouched.
+`hud-catalog.sh hudkit <v>` sets the HUDKit version; `show` prints the published file.
 
 **No Sparkle.** The apps carry no Sparkle framework and no `SU*` keys in `Info.plist` (the
 release script refuses a bundle with `SUFeedURL`): MacHUD compares each installed app's
