@@ -7,6 +7,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
 ### Changed
 - The family's backdrop (`HUDGlassView`: hover panels, widgets, dock labels and every other
   HUD glass) is the window server's own blur of what is behind the window, radius 25, under a
