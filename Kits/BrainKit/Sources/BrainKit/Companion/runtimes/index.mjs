@@ -4,6 +4,7 @@ import { ClaudeRuntime } from './claude.mjs';
 import { loadPlugin } from './plugins.mjs';
 
 /** Built-in runtimes. Adding a brain means adding its adapter here (see README); others are plugins. */
+export const RUNTIMES = { codex: CodexRuntime, hermes: HermesRuntime, claude: ClaudeRuntime };
 export const RUNTIME_IDS = Object.keys(RUNTIMES);
 
 /**

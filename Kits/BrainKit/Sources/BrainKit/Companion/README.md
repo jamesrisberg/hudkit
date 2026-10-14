@@ -10,7 +10,7 @@ manual mode. Audio stays in the host app's local speech pipeline; this service
 accepts only text. The runtime sends that text and relevant tool context to its
 configured model provider and keeps its own conversation history on disk.
 
-Four runtimes are built in:
+Three runtimes are built in, and runtime plugins add others (see Runtime plugins):
 
 | `--runtime` | Agent | Transport | Folder scope | Approvals | Cancel |
 |---|---|---|---|---|---|
@@ -39,6 +39,7 @@ Flags:
   a saved plugin the command line no longer names falls back to it.
 - `--state-dir /absolute/path` — private state (default `~/.brainkit-companion`).
 - `--port 8789` — HTTP port on 127.0.0.1 (default 8788).
+- `--codex /path/to/codex`, `--claude /path/to/claude` —
   executables if not on PATH
   (Homebrew Codex: `--codex /opt/homebrew/bin/codex`).
 - `--runtime-url http://127.0.0.1:8642` — Hermes API server. Plain HTTP only on
@@ -101,14 +102,17 @@ unknown keys, duplicate names and non-string arguments or environment values are
 | Runtime | Tool servers | `requireApproval: false` | `requireApproval: true` |
 |---|---|---|---|
 | `codex` | `codex app-server -c mcp_servers.<name>.command="…" -c mcp_servers.<name>.args=[…] [-c mcp_servers.<name>.env={ "K" = "v" }]` (values are TOML) | `-c mcp_servers.<name>.default_tools_approval_mode="approve"`: no prompt | `…="prompt"`: every call asks (an `mcpServer/elicitation/request` with `_meta.codex_approval_kind: "mcp_tool_call"`, shown as a `tool` approval; Allow answers `{"action":"accept","content":{}}`, Deny `{"action":"decline"}`) |
+| `claude` | added to `--mcp-config` (`mcpServers`, `type: "stdio"`) | `--allowedTools mcp__<name>__*` | Claude Code's normal permission prompt |
 | `hermes` | not supported | | |
+| a plugin | as its adapter passes them (`supportsToolServers`) | | |
 
 Only elicitations from a configured tool server that are tool-call approvals become
 approvals; any other elicitation is refused, which Codex treats as a decline. The host
 context is appended, after a blank line, to the instructions every runtime receives:
-Hermes' run `instructions`. Snapshots report the servers as `toolServers: { names, active,
+Codex's `developerInstructions`, Claude Code's `--append-system-prompt`, Hermes' run
+`instructions`, and a plugin's `start` options. Snapshots report the servers as `toolServers: { names, active,
 note }`; with Hermes `active` is false and `note` says Hermes cannot use them (Hermes only has
-the tools configured in Hermes itself). Tool servers and host context are launch options for
+the tools configured in Hermes itself).
 The Codex form was checked against Codex 0.155.1: with these overrides `config/read` shows the
 servers with their environment and approval mode, and `mcpServerStatus/list` lists a
 configured stdio server's tools, without a model turn.
@@ -359,6 +363,7 @@ polls complete snapshots so missed polls do not lose approvals.
 - `POST /v1/cancel` with `{}` — request interruption; subsequent snapshots confirm it.
   Returns 409 if the runtime cannot interrupt.
 - `POST /v1/session/reset` with `{}` — start a new conversation while idle.
+- `POST /v1/runtime` with `{ "runtime": "codex" | "hermes" | "claude" | "<plugin id>" }` — switch
   runtime while idle (409 otherwise), or restart the current one after a failure.
   Only the name crosses HTTP; executables, URLs and tokens come from the command
   line. Permissions and recent request IDs carry over; each runtime's conversation
@@ -370,6 +375,7 @@ Snapshots contain `threadId`, `turnId`, `status`, `output`, `progress`, `approva
 `requestId`, `route`, `timing`, `permissions` (mode and approved folders),
 `routing`, then `runtime` (the runtime ID), `capabilities`
 (`approvals`, `folderScope`, `modelRouting`, `cancel`) and `sessionKey` (the external
+session the runtime drives, in the runtime's own form, or null), and `toolServers`
 (`names`, `active`, `note`; see Tool servers and host context). The fields before `runtime`
 keep a fixed order and encoding, and new fields are only appended after them
 (`test/snapshot-compat.test.mjs`).
@@ -401,7 +407,8 @@ Runs API and SSE (deltas, progress, approval round trip, stop, degraded
 capabilities, dropped stream, restart), the Claude adapter against a fake `claude`
 that launches the real MCP permission bridge (streaming, resume, approvals, SIGINT
 cancel, crash, permission modes, socket authentication), tool servers and host context
-relaunch on a change), runtime switching, runtime plugins (`runtime.json`, the trust refusals,
+(validation, the exact Codex `-c` and Claude `--mcp-config`/`--allowedTools` arguments, Codex
+MCP tool-call approvals, private host files, the Hermes note), runtime switching, runtime plugins (`runtime.json`, the trust refusals,
 the kit, and the fixture plugin through a session and a spawned companion), HTTP
 auth/Host/Origin checks, body limits, file permissions, and snapshot byte
 compatibility. The smoke test initializes the installed Codex protocol and reads

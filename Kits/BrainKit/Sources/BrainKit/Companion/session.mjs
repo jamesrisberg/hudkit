@@ -51,6 +51,7 @@ export class Session {
     const names = this.toolServerNames;
     const active = names.length > 0 && this.runtime.supportsToolServers;
     const note = names.length && !active
+      ? `${this.runtime.displayName} cannot use this app's tools (${names.join(', ')}); it only has the tools configured in ${this.runtime.displayName} itself. Choose a runtime that takes tool servers, such as Codex or Claude, to use them.`
       : null;
     return { names: [...names], active, note };
   }
@@ -58,6 +59,7 @@ export class Session {
     const handlers = {
       started: ({ turnId }) => {
         // A turn nobody submitted here was started in another client of the same session
+        // (a runtime that drives an external session): it belongs to no request and replaces the last answer.
         if (!this.busy && !ACTIVE.includes(this.state.status)) {
           this.approvals.clear();
           return this.update({ turnId, status: 'running', requestId: null, route: null, timing: null, output: '', error: null, approvals: [], progress: 'Working' });

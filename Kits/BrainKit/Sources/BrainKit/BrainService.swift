@@ -17,8 +17,12 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
     public var port: Int
     /// `node` override; empty finds Node.js on PATH and the common install folders.
     public var nodePath: String
+    /// `codex` and `claude` overrides; empty finds them the same way.
     public var codexPath: String
     public var claudePath: String
+    /// Runtime plugins' executable overrides by plugin id; a missing or empty one finds the
+    /// executable the way the plugin's `runtime.json` says.
+    public var pluginExecutablePaths: [String: String]
     /// Hermes API server (`--runtime-url`); empty lets the companion read `~/.hermes/.env`.
     public var hermesURL: String
     /// Name the voice instructions give the assistant (`--assistant-name`); empty names none.
@@ -32,6 +36,7 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
 
     public init(runtime: AgentRuntime, workingDirectory: String, stateDirectory: String, port: Int,
                 nodePath: String = "", codexPath: String = "", claudePath: String = "",
+                pluginExecutablePaths: [String: String] = [:], hermesURL: String = "", assistantName: String = "",
                 toolServers: [BrainToolServer] = [], hostContext: String = "") {
         self.runtime = runtime
         self.workingDirectory = workingDirectory
@@ -40,6 +45,7 @@ public struct BrainServiceConfiguration: Equatable, Sendable {
         self.nodePath = nodePath
         self.codexPath = codexPath
         self.claudePath = claudePath
+        self.pluginExecutablePaths = pluginExecutablePaths
         self.hermesURL = hermesURL
         self.assistantName = assistantName
         self.toolServers = toolServers
@@ -95,7 +101,8 @@ public final class BrainService: ObservableObject {
     public let service: ManagedService
     /// Which Node.js runs the companion, or why none can.
     @Published public private(set) var nodeStatus = ""
-    /// Last detection of each brain for the current configuration.
+    /// Last detection of each brain for the current configuration: the built-in runtimes and
+    /// every runtime plugin found (`BrainCatalog.detectAll`).
     @Published public private(set) var detections: [AgentRuntime: BrainCatalog.Detection] = [:]
     /// The configuration last asked for; it may still be waiting out the debounce.
     public private(set) var configuration: BrainServiceConfiguration?
@@ -282,18 +289,13 @@ public final class BrainService: ObservableObject {
     }
 
     private func detect(_ configuration: BrainServiceConfiguration?) {
-        let locator = locatorProvider()
-        var result: [AgentRuntime: BrainCatalog.Detection] = [:]
-        for runtime in AgentRuntime.allCases {
-            let override: String
-            switch runtime {
-            case .codex: override = configuration?.codexPath ?? ""
-            case .claude: override = configuration?.claudePath ?? ""
-            case .hermes: override = ""
-            }
-            result[runtime] = BrainCatalog.detect(runtime, locator: locator, override: override)
+        var overrides: [AgentRuntime: String] = [.codex: configuration?.codexPath ?? "",
+                                                 .claude: configuration?.claudePath ?? ""]
+        for (id, path) in configuration?.pluginExecutablePaths ?? [:] {
+            if let runtime = AgentRuntime(rawValue: id), !runtime.isBuiltIn { overrides[runtime] = path }
         }
-        detections = result
+        let found = BrainCatalog.detectAll(locator: locatorProvider(), overrides: overrides)
+        detections = Dictionary(found.map { ($0.runtime, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// Reads a companion token like the companion does: no symlink, a regular file owned by
@@ -341,6 +343,14 @@ public final class BrainService: ObservableObject {
               fileManager.fileExists(atPath: server.path)
         else {
             return .failure(ServiceUnavailable(reason: "The brain companion is missing from this build."))
+        }
+        // A plugin runs only when it is available; a built-in that cannot start is reported by
+        // the companion itself.
+        if !configuration.runtime.isBuiltIn {
+            let detection = detections[configuration.runtime]
+            if let reason = detection?.unavailableReason ?? (detection == nil ? "\(configuration.runtime.rawValue) is not installed." : nil) {
+                return .failure(ServiceUnavailable(reason: reason))
+            }
         }
         let node: String
         switch nodeExecutable(override: configuration.nodePath) {
@@ -395,6 +405,13 @@ public final class BrainService: ObservableObject {
         ]
         if let codex = detections[.codex]?.executable { arguments += ["--codex", codex] }
         if let claude = detections[.claude]?.executable { arguments += ["--claude", claude] }
+        let plugins = detections.values.filter { $0.plugin != nil && $0.isAvailable }
+            .sorted { $0.runtime.rawValue < $1.runtime.rawValue }
+        for detection in plugins {
+            guard let plugin = detection.plugin, let executable = detection.executable else { continue }
+            arguments += ["--runtime-plugin", "\(plugin.id)=\(plugin.directory)",
+                          "--runtime-executable", "\(plugin.id)=\(executable)"]
+        }
         let hermesURL = configuration.hermesURL.trimmingCharacters(in: .whitespaces)
         if !hermesURL.isEmpty { arguments += ["--runtime-url", hermesURL] }
         if !name.isEmpty { arguments += ["--assistant-name", name] }
@@ -403,7 +420,7 @@ public final class BrainService: ObservableObject {
         // The files' contents are part of the key: the companion reads them only at start.
         let key = [node] + arguments + [toolServersJSON, hostContext]
         arguments += ["--runtime", configuration.runtime.rawValue]
-        let toolDirectories = detections.values.compactMap { $0.executable }
+        let toolDirectories = detections.values.filter { $0.plugin == nil || $0.isAvailable }.compactMap { $0.executable }
             .map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
         var environment = baseEnvironment
         environment["PATH"] = locatorProvider().childPath(

@@ -83,9 +83,10 @@ final class ExecutableLocatorTests: XCTestCase {
         XCTAssertFalse(BrainCatalog.hermesAPIServerEnabled(""))
     }
 
-    func testEveryRuntimeHasACatalogEntry() {
-        for runtime in AgentRuntime.allCases {
-            XCTAssertEqual(BrainCatalog.entry(for: runtime).executable, runtime.rawValue)
+    func testEveryBuiltInRuntimeHasACatalogEntry() {
+        for runtime in AgentRuntime.builtIns {
+            XCTAssertEqual(BrainCatalog.entry(for: runtime)?.executable, runtime.rawValue)
         }
+        XCTAssertNil(BrainCatalog.entry(for: AgentRuntime(rawValue: "example-agent")!))
     }
 }

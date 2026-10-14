@@ -43,6 +43,7 @@ import { EventEmitter } from 'node:events';
  *
  *   snapshot() -> { routing, route, sessionKey? }
  *     Runtime-specific snapshot fields (see Session.snapshot()). `sessionKey` names an
+ *     external session the runtime drives, in the runtime's own form, or null.
  *
  *   persistentState() -> object
  *     Extra JSON persisted in the state directory and passed back as `saved`.

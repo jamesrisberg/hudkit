@@ -83,8 +83,11 @@ export function createServer({ session, token, runtimes = RUNTIME_IDS }) {
     } catch (error) { json(response, error.status ?? 503, { error: String(error.message).slice(0, 2048) }); }
   });
 }
+const USAGE = 'Usage: node server.mjs --cwd /absolute/workspace [--runtime codex|hermes|claude|<plugin id>] [--state-dir /path] [--port 8788]\n' +
+  '  [--codex /path/to/codex] [--claude /path/to/claude] [--runtime-url http://127.0.0.1:8642] [--runtime-token TOKEN | --runtime-token-file /path]\n' +
   '  [--assistant-name NAME] [--tool-servers /path/tool-servers.json] [--host-context /path/host-context.md]\n' +
   '  [--runtime-plugin ID=/path/to/plugin-folder [--runtime-executable ID=/path/to/executable]]...';
+const FLAGS = ['--cwd', '--state-dir', '--codex', '--claude', '--port', '--runtime', '--runtime-url', '--runtime-token', '--runtime-token-file', '--assistant-name', '--tool-servers', '--host-context'];
 /** Flags that may be given more than once; their values are collected in a list. */
 const REPEATED = ['--runtime-plugin', '--runtime-executable'];
 export function parseArguments(args) {
@@ -139,6 +142,7 @@ async function main() {
   // A saved choice of a plugin the host no longer passes falls back to Codex.
   const runtimeName = options['--runtime'] ?? ([...RUNTIME_IDS, ...Object.keys(plugins)].includes(saved.runtime) ? saved.runtime : 'codex');
   const { toolServers, hostContext } = await loadHostFiles(options);
+  const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], runtimeUrl: options['--runtime-url'], runtimeToken, toolServers, plugins };
   const build = name => createRuntime(name, runtimeOptions);
   const instructions = withHostContext(voiceInstructions(options['--assistant-name']), hostContext);
   const session = new Session({ runtime: await build(runtimeName), cwd, saved, createRuntime: build, instructions, toolServers, save: state => saveState(directory, { ...state, cwd }) });

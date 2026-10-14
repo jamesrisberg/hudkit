@@ -7,6 +7,35 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Added
+- BrainKit runtime plugins: an agent runtime installed apart from BrainKit, offered beside Codex,
+  Claude Code and Hermes. A plugin is a folder
+  `~/Library/Application Support/BrainKit/Runtimes/<id>/` (or under `BRAINKIT_RUNTIMES_DIR`)
+  with a `runtime.json` (id, title, version, adapter, the executable to find and where, optional
+  install and login commands, required tools, a note, summary and docs link) and an adapter
+  module whose factory receives a small kit of companion helpers. A plugin is used only when its
+  folder and files belong to the user, nobody else can write them, none is a symbolic link and
+  the adapter stays inside the folder; otherwise it is listed with the reason. `BrainService`
+  reports plugins in `detections` (title, executable, commands, note, missing tools, refusal,
+  `isAvailable`, `unavailableReason`) and passes each available one to the companion
+  (`--runtime-plugin`, `--runtime-executable`). New `RuntimePlugin`, `BrainCatalog.detectAll`,
+  `ExecutableLocator.runtimesDirectory` and `BrainSettings.plugins` (each plugin's executable
+  override).
+
+### Changed
+- `AgentRuntime` is a struct holding a runtime id rather than an enum: `.codex`, `.hermes` and
+  `.claude` work as before and a plugin's id is a runtime too. A `switch` over it needs a
+  `default`, and `AgentRuntime.allCases` is now `AgentRuntime.builtIns`.
+  `AgentRuntime(rawValue:)` accepts any valid id, so `BrainSettings` keeps a chosen plugin that is
+  not installed (the service says why it cannot run) and only an invalid id decodes to Codex.
+  `BrainCatalog.entry(for:)` returns nil for a plugin. `BrainCatalog.Detection` carries the
+  runtime's title, commands and availability.
+
+### Removed
+- BrainKit's fourth built-in runtime, with its `BrainSettings` key, its options type,
+  `BrainServiceConfiguration`'s path for it and the companion's flag; such a runtime is now a
+  plugin. Its saved settings are not carried over.
+
 ## [0.4.0] - 2026-10-13
 
 ### Changed

@@ -31,6 +31,9 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         }
     }
 
+    /// A runtime plugin's options.
+    public struct PluginOptions: Codable, Equatable, Sendable {
+        /// Path to the plugin's executable; empty finds it the way its `runtime.json` says.
         public var executablePath: String
 
         public init(executablePath: String = "") { self.executablePath = executablePath }
@@ -64,10 +67,13 @@ public struct BrainSettings: Codable, Equatable, Sendable {
     public var codex: CodexOptions
     public var claude: ClaudeOptions
     public var hermes: HermesOptions
+    /// Each runtime plugin's options, by plugin id.
+    public var plugins: [String: PluginOptions]
 
     public init(runtime: AgentRuntime = .codex, workspacePath: String = "", assistantName: String = "",
                 nodePath: String = "", codex: CodexOptions = CodexOptions(),
                 claude: ClaudeOptions = ClaudeOptions(), hermes: HermesOptions = HermesOptions(),
+                plugins: [String: PluginOptions] = [:]) {
         self.runtime = runtime
         self.workspacePath = workspacePath
         self.assistantName = assistantName
@@ -75,14 +81,17 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         self.codex = codex
         self.claude = claude
         self.hermes = hermes
+        self.plugins = plugins
     }
 
     private enum CodingKeys: String, CodingKey {
+        case runtime, workspacePath, assistantName, nodePath, codex, claude, hermes, plugins
     }
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let runtime = try values.decodeIfPresent(String.self, forKey: .runtime)
+        // A plugin that is not installed stays chosen; the service reports it unavailable.
         self.runtime = runtime.flatMap(AgentRuntime.init(rawValue:)) ?? .codex
         workspacePath = try values.decodeIfPresent(String.self, forKey: .workspacePath) ?? ""
         assistantName = try values.decodeIfPresent(String.self, forKey: .assistantName) ?? ""
@@ -90,6 +99,7 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         codex = try values.decodeIfPresent(CodexOptions.self, forKey: .codex) ?? CodexOptions()
         claude = try values.decodeIfPresent(ClaudeOptions.self, forKey: .claude) ?? ClaudeOptions()
         hermes = try values.decodeIfPresent(HermesOptions.self, forKey: .hermes) ?? HermesOptions()
+        plugins = try values.decodeIfPresent([String: PluginOptions].self, forKey: .plugins) ?? [:]
     }
 
     /// The launch configuration for these settings. The host chooses where the companion
@@ -98,5 +108,7 @@ public struct BrainSettings: Codable, Equatable, Sendable {
         BrainServiceConfiguration(
             runtime: runtime, workingDirectory: workspacePath, stateDirectory: stateDirectory, port: port,
             nodePath: nodePath, codexPath: codex.executablePath, claudePath: claude.executablePath,
+            pluginExecutablePaths: plugins.mapValues(\.executablePath), hermesURL: hermes.url,
+            assistantName: assistantName)
     }
 }

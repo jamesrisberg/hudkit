@@ -163,6 +163,10 @@ final class AgentSessionClientTests: XCTestCase {
     }
 
     func testSnapshotsCarryTheExternalSessionKey() throws {
+        let base = #"{"status":"idle","output":"","progress":"Ready","approvals":[],"revision":1,"runtime":"example-agent""#
+        let plugin = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base + #","sessionKey":"example:abc"}"#).utf8))
+        XCTAssertEqual(plugin.sessionKey, "example:abc")
+        XCTAssertEqual(plugin.runtimeName, "example-agent")
         let none = try JSONDecoder().decode(AgentSessionSnapshot.self, from: Data((base + #","sessionKey":null}"#).utf8))
         XCTAssertNil(none.sessionKey)
     }

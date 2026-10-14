@@ -20,16 +20,58 @@ public struct AgentPermissions: Codable, Equatable, Sendable {
     }
 }
 
-/// Agent runtimes the companion can run. Raw values match the companion's `--runtime`.
-public enum AgentRuntime: String, Codable, CaseIterable, Identifiable, Sendable {
-    case codex, hermes, claude
+/// An agent runtime the companion can run: one of the built-ins or a runtime plugin's id (see
+/// the companion README, "Runtime plugins"). Raw values match the companion's `--runtime`.
+public struct AgentRuntime: RawRepresentable, Codable, Hashable, Identifiable, Sendable, CustomStringConvertible {
+    public static let codex = AgentRuntime(id: "codex")
+    public static let hermes = AgentRuntime(id: "hermes")
+    public static let claude = AgentRuntime(id: "claude")
+    /// The runtimes the companion has without plugins, in the order a host lists them.
+    public static let builtIns: [AgentRuntime] = [.codex, .hermes, .claude]
+
+    public let rawValue: String
+
+    /// Nil unless `rawValue` is a runtime id: a lowercase letter, then up to 31 lowercase
+    /// letters, digits or `-`.
+    public init?(rawValue: String) {
+        guard Self.isValidID(rawValue) else { return nil }
+        self.rawValue = rawValue
+    }
+
+    private init(id: String) { rawValue = id }
+
+    public static func isValidID(_ id: String) -> Bool {
+        guard let first = id.unicodeScalars.first, ("a"..."z").contains(first), id.unicodeScalars.count <= 32 else {
+            return false
+        }
+        return id.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
+    }
+
     public var id: String { rawValue }
+    public var description: String { rawValue }
+    public var isBuiltIn: Bool { Self.builtIns.contains(self) }
+
+    /// A built-in's name; a plugin's id (its title is in its `BrainCatalog.Detection`).
     public var displayName: String {
         switch self {
         case .codex: return "Codex"
         case .hermes: return "Hermes"
         case .claude: return "Claude"
+        default: return rawValue
         }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        guard let runtime = AgentRuntime(rawValue: value) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "\"\(value)\" is not a runtime id"))
+        }
+        self = runtime
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
     }
 }
 
@@ -95,7 +137,8 @@ public struct AgentSessionSnapshot: Codable, Equatable, Sendable {
     /// The runtime id; a snapshot without one comes from a companion running Codex.
     public var runtime: String?
     public var capabilities: AgentCapabilities?
-    /// nil for runtimes without one.
+    /// The external session the runtime drives, in the runtime's own form; nil for runtimes
+    /// without one.
     public var sessionKey: String?
     /// The host's tool servers and whether this runtime gives them to the agent; nil from a
     /// companion that predates them.
