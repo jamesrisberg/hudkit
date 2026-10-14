@@ -1,5 +1,6 @@
 import Foundation
 
+/// The `agent-sessions` capability: a panel that shows agent sessions (Claude Code, Codex, ...)
 /// and can be told to show and focus one. A panel opts in by listing `HUDAgentSessions.capability`
 /// in its manifest `capabilities`, then answers two things on its own socket:
 ///
@@ -38,6 +39,8 @@ public enum HUDAgentSessions {
 
 /// One entry of a provider's `sessions` reply.
 public struct HUDAgentSession: Equatable, Sendable {
+    /// The session's key in the provider's own form (e.g. `claude:<sessionId>`), as passed to
+    /// `open-session`.
     public var id: String
     public var title: String
     public var cwd: String?
