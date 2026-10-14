@@ -1,6 +1,7 @@
 # BrainKit
 
-through a small Node service (the companion) that the app launches, supervises and talks to
+BrainKit gives a macOS app a local agent "brain": Codex, Claude Code, Hermes or a runtime
+plugin the user installed, reached through a small Node service (the companion) that the app launches, supervises and talks to
 over loopback HTTP. It is its own Swift package in the HUDKit repository (`Kits/BrainKit`); an app that
 depends only on HUDKit does not fetch or build it.
 
@@ -17,12 +18,15 @@ later on the user's Mac and no npm packages.
 | Type | What it does |
 |---|---|
 | `BrainService` | Builds the companion's command line from a `BrainServiceConfiguration`, finds Node.js, runs it under a `ManagedService`, reads its token and hands out clients |
+| `BrainServiceConfiguration` | Runtime, workspace (`--cwd`), state directory, port, the Node/Codex/Claude/Hermes/assistant-name options, plugin executable overrides, tool servers and host context |
 | `BrainToolServer`, `AgentToolServerStatus` | A stdio MCP server whose tools the agent gets; the snapshot's report of them |
 | `BrainSettings` | The Codable brain choice and per-runtime options a settings tab binds to; `serviceConfiguration(stateDirectory:port:)` turns it into a configuration |
 | `AgentSessionClient` | Polls complete snapshots and sends turns, approvals, cancel, reset, runtime switches and permissions |
-| `AgentSessionSnapshot` and friends | `AgentRuntime`, `AgentPermissions`, `AgentCapabilities`, `AgentApproval`, `AgentRoute`, `AgentTiming`, `AgentSessionError` |
+| `AgentSessionSnapshot` and friends | `AgentRuntime` (a runtime id: `.codex`, `.hermes`, `.claude` or a plugin's), `AgentPermissions`, `AgentCapabilities`, `AgentApproval`, `AgentRoute`, `AgentTiming`, `AgentSessionError` |
 | `TranscriptModel` | Reduces snapshots plus what the user said into transcript rows (user, reply, progress, approval, notice) and events (`turnStarted`, `firstOutput`, `approvalAdded`, `turnEnded`) |
 | `ManagedService` | Keeps one child process running: readiness line, exponential backoff (1 s doubling to 30 s), gives up after 6 failed starts, 45 s readiness timeout, failures reset after 60 s up; a replaced process exits before its successor starts (at most 10 s wait); a failure's reason is the child's last output line |
+| `ExecutableLocator`, `BrainCatalog` | Find `node`, `codex`, `claude`, `hermes` and plugins' tools the way a login shell would; install and sign-in commands per brain; Hermes API server detection; `detectAll` for the built-ins and every plugin |
+| `RuntimePlugin` | A runtime plugin's folder as found: its `runtime.json`, or why it is refused |
 | `BrainCompanion` | Locates the bundled companion folder |
 
 ## Running a brain
@@ -49,6 +53,8 @@ import BrainKit
 ```
 
 `BrainService` runs `node <Companion>/server.mjs --cwd <workspace> --state-dir <state> --port
+<port> [--codex <path>] [--claude <path>] [--runtime-plugin <id>=<folder> --runtime-executable <id>=<path>]...
+[--runtime-url <url>] [--assistant-name <name>]
 [--tool-servers <state>/tool-servers.json] [--host-context <state>/host-context.md] --runtime <runtime>` in the workspace, with the tools' folders first on `PATH` and
 `BRAINKIT_PARENT_PIPE=1`. The supervisor holds the child's stdin open; the companion exits
 when it closes, so it never outlives the app, even after a crash. It is ready when it prints
@@ -69,7 +75,8 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
   `arguments`, `environment`, `requireApproval`) whose tools the agent gets; `hostContext` is
   Markdown about the host's world, appended to the runtime's instructions after the voice
   instructions. They are written to `tool-servers.json` and `host-context.md` (0600) in the
-  cannot, and `AgentSessionSnapshot.toolServers` says so in `note`. A server with
+  state directory, and removed when empty. Codex, Claude and plugins that take them use the
+  servers; Hermes cannot, and `AgentSessionSnapshot.toolServers` says so in `note`. A server with
   `requireApproval` false runs its tools without asking; the agent's other actions keep their
   approval policy. Per-runtime details are in the companion README.
 - **Endpoint.** `endpoint()` and `makeClient()` return nil until the process reports ready.
@@ -85,14 +92,33 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
 - **Why it cannot run.** Missing workspace, a relative state directory, a bad port, an
   assistant name that is not one line of at most 64 characters (UTF-16 units, the companion's
   rule), a tool server without a valid unique name or a command, a host context over 65,536
-  characters, a missing companion or no Node.js 22+ leave `service.state` at `.unavailable(reason)`
+  characters, a missing companion, no Node.js 22+ or a chosen plugin that is not available
+  (`Detection.unavailableReason`) leave `service.state` at `.unavailable(reason)`
   with a sentence to show; `nodeStatus` says which Node.js is used. `node --version` runs on
   the main actor, at most 2 s, once per path; `refreshDetections()` checks again after an
   install or upgrade.
-  installed (and whether Hermes' API server is enabled in `~/.hermes/.env`). The companion
+- **Brains.** `detections` lists the built-in runtimes and every runtime plugin, by
+  `AgentRuntime`: each one's `title`, `executable` (nil when not installed), install and login
+  commands, `summary`, `docsURL`, a plugin's `note` and `missingRequirements`, and `refusal`;
+  `isAvailable` and `unavailableReason` sum them up. Hermes' also says whether its API server
+  is enabled in `~/.hermes/.env`. The companion
   reports what the running runtime can honour in `capabilities`; show or hide approvals, folder
   scope, model routing and cancel from it.
-  can ask the app that shows agent sessions to open it. Turns typed there appear in the
+- **Runtime plugins.** A plugin is a folder `~/Library/Application Support/BrainKit/Runtimes/<id>/`
+  (`BRAINKIT_RUNTIMES_DIR` names another parent folder; `ExecutableLocator.runtimesDirectory`)
+  with a `runtime.json` and an adapter module; the companion README's "Runtime plugins" has the
+  contract and the trust rule, which covers the `Runtimes` folder, the plugin's folder and
+  everything in it. `BrainService` passes every available plugin to the companion
+  (`--runtime-plugin`, `--runtime-executable`), so switching to one needs no restart; a plugin
+  that is refused, missing its executable or missing a tool it `requires` is not passed. At
+  each detection (a configuration change or `refreshDetections()`), the companion restarts only
+  for the chosen plugin: when it was started without it, or with another folder, executable,
+  `version` or adapter file. Adding or upgrading a plugin that is not chosen never restarts it
+  (a running turn is never cut); the next start passes it. `BRAINKIT_RUNTIMES_DIR` may start with `~/`;
+  a relative value reads no plugins and `runtimePluginsProblem` says why.
+- **External sessions.** A runtime that drives a session another app also shows reports it in
+  `AgentSessionSnapshot.sessionKey`, in the runtime's own form, so a host can ask that app to
+  open it. Turns started there appear in the snapshots without a `requestId`.
 
 ## Settings
 
@@ -101,10 +127,14 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
 ```json
 { "runtime": "codex", "workspacePath": "/Users/me/Assistant", "assistantName": "",
   "nodePath": "", "codex": { "executablePath": "" }, "claude": { "executablePath": "" },
+  "hermes": { "url": "" }, "plugins": { "example-agent": { "executablePath": "" } } }
 ```
 
 Empty paths are found on `PATH` and the common install folders (Homebrew, `~/.local/bin`,
-nvm, Volta, `~/.claude/local`). A missing key or an unknown runtime decodes to its default.
+nvm, Volta, `~/.claude/local`), and a plugin's also in its `searchPaths`. `plugins` holds each
+runtime plugin's options by id. A missing key or a runtime that is not a valid id decodes to its
+default; a valid id of a plugin that is not installed stays chosen and the service says why it
+cannot run.
 There are no secrets in it: Hermes' API key stays in `~/.hermes/.env` (or
 `BRAINKIT_RUNTIME_TOKEN` in the companion's environment) and the companion token stays in the
 state directory. The folder permissions (`approvedFolders` or `fullAccess`) are the companion's
@@ -132,6 +162,8 @@ Names the companion uses:
 | `brainkit-<uuid>` | Hermes session ids the companion creates |
 | `--assistant-name NAME` | the name the voice instructions give the assistant; none by default |
 | `--tool-servers`, `--host-context` | the host's tool servers and context, files in the state directory |
+| `--runtime-plugin`, `--runtime-executable` | a runtime plugin's folder and the executable found for it |
+| `BRAINKIT_RUNTIMES_DIR` | the folder runtime plugins are read from, instead of `~/Library/Application Support/BrainKit/Runtimes` |
 | `~/.brainkit-companion` | default state directory when the companion is run by hand |
 
 ## Tests

@@ -7,6 +7,7 @@ import AppKit
 ///   never hidden on deactivate. `keyable` is false for click-only strips (clicking must never
 ///   take focus from the app the user is in) and true for panels with text fields. A
 ///   non-activating panel can take key status without activating its app.
+/// - `.windowed`: a windowed HUD app's main window (Sift's browser, an app's dashboard)
 ///   behaves like a normal window. Same glass look (borderless, transparent, shadow,
 ///   draggable by its background), but at `.normal` level, activating its app when clicked,
 ///   key and main, on the current Space only, in Mission Control and the ⌘` cycle. Other

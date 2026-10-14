@@ -125,7 +125,7 @@ scratch watch                               # stream state events (Ctrl-C to sto
 `append`, `new`, `open`, `list`, `get`, `body`, `clear` map to `action name=<verb>` (`body` is
 `get` printing only the body). `append` without `text=` and without piped stdin exits 2. Text
 over about 900,000 bytes is refused before sending (the server's line limit is 1,000,000). A
-leading `ctl` is ignored (`scratch ctl hello`), as in every family CLI except the template's and
+leading `ctl` is ignored (`scratch ctl hello`), as in every family CLI except the template's.
 
 ### Sift (windowed; file browser)
 
@@ -159,6 +159,7 @@ may be a name or an absolute path.
 ### watch
 
 Scratch, Sift, Stash, ffmpegHUD, magickHUD and serversHUD have `watch [events=state]` (the
+template does not): it subscribes and prints each event as one compact JSON line with
 sorted keys until the app quits (exit 0) or Ctrl-C:
 
 ```

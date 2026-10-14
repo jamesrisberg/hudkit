@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createRuntime, RUNTIME_IDS } from './runtimes/index.mjs';
+import { pluginOptions } from './runtimes/plugins.mjs';
 import { Session } from './session.mjs';
 import { voiceInstructions } from './voice-instructions.mjs';
 import { parseToolServers, withHostContext } from './tool-servers.mjs';
@@ -59,7 +60,8 @@ async function body(request) {
 function exactObject(value, keys) {
   return value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(key => keys.includes(key));
 }
-export function createServer({ session, token }) {
+/** `runtimes`: the ids `POST /v1/runtime` accepts, the built-ins and the plugins given. */
+export function createServer({ session, token, runtimes = RUNTIME_IDS }) {
   return http.createServer({ requestTimeout: 10000, headersTimeout: 10000, maxHeaderSize: 8192 }, async (request, response) => {
     // Native client only: browser origins are rejected even with a valid token.
     const port = request.socket.localPort;
@@ -76,22 +78,39 @@ export function createServer({ session, token }) {
       if (request.url === '/v1/permissions' && exactObject(value, ['mode', 'approvedFolders'])) return json(response, 200, await session.setPermissions(value));
       if (request.url === '/v1/cancel' && exactObject(value, []) ) return json(response, 200, await session.cancel());
       if (request.url === '/v1/session/reset' && exactObject(value, [])) return json(response, 200, await session.reset());
-      if (request.url === '/v1/runtime' && exactObject(value, ['runtime']) && RUNTIME_IDS.includes(value.runtime)) return json(response, 200, await session.switchRuntime(value.runtime));
+      if (request.url === '/v1/runtime' && exactObject(value, ['runtime']) && runtimes.includes(value.runtime)) return json(response, 200, await session.switchRuntime(value.runtime));
       json(response, 400, { error: 'Invalid request' });
     } catch (error) { json(response, error.status ?? 503, { error: String(error.message).slice(0, 2048) }); }
   });
 }
-  '  [--assistant-name NAME] [--tool-servers /path/tool-servers.json] [--host-context /path/host-context.md]';
+const USAGE = 'Usage: node server.mjs --cwd /absolute/workspace [--runtime codex|hermes|claude|<plugin id>] [--state-dir /path] [--port 8788]\n' +
+  '  [--codex /path/to/codex] [--claude /path/to/claude] [--runtime-url http://127.0.0.1:8642] [--runtime-token TOKEN | --runtime-token-file /path]\n' +
+  '  [--assistant-name NAME] [--tool-servers /path/tool-servers.json] [--host-context /path/host-context.md]\n' +
+  '  [--runtime-plugin ID=/path/to/plugin-folder [--runtime-executable ID=/path/to/executable]]...';
+const FLAGS = ['--cwd', '--state-dir', '--codex', '--claude', '--port', '--runtime', '--runtime-url', '--runtime-token', '--runtime-token-file', '--assistant-name', '--tool-servers', '--host-context'];
+/** Flags that may be given more than once; their values are collected in a list. */
+const REPEATED = ['--runtime-plugin', '--runtime-executable'];
 export function parseArguments(args) {
   const options = {};
   for (let i = 0; i < args.length; i += 2) {
+    if (REPEATED.includes(args[i]) && args[i + 1]) { (options[args[i]] ??= []).push(args[i + 1]); continue; }
     if (!FLAGS.includes(args[i]) || !args[i + 1] || options[args[i]] !== undefined) throw new Error(USAGE);
     options[args[i]] = args[i + 1];
   }
-  if (options['--runtime'] !== undefined && !RUNTIME_IDS.includes(options['--runtime'])) throw new Error(`--runtime must be one of: ${RUNTIME_IDS.join(', ')}`);
+  const runtimes = [...RUNTIME_IDS, ...Object.keys(pluginOptions(options, RUNTIME_IDS))];
+  if (options['--runtime'] !== undefined && !runtimes.includes(options['--runtime'])) throw new Error(`--runtime must be one of: ${runtimes.join(', ')}`);
   if (options['--runtime-token'] && options['--runtime-token-file']) throw new Error('Use either --runtime-token or --runtime-token-file');
   if (options['--assistant-name'] !== undefined && !/^[^\n\r]{1,64}$/.test(options['--assistant-name'])) throw new Error('--assistant-name must be one line of at most 64 characters');
   return options;
+}
+/**
+ * The runtime to start with: `--runtime`, else the one saved in the state directory, else
+ * Codex. A saved plugin the command line does not pass (uninstalled, or refused by the host)
+ * falls back to Codex; its conversation stays saved and resumes when the plugin is back.
+ */
+export function startupRuntime(options, saved, plugins) {
+  if (options['--runtime'] !== undefined) return options['--runtime'];
+  return [...RUNTIME_IDS, ...Object.keys(plugins)].includes(saved.runtime) ? saved.runtime : 'codex';
 }
 const HOST_CONTEXT_LIMIT = 65536;
 /**
@@ -128,12 +147,14 @@ async function main() {
   // A token file keeps the Hermes key out of the process list; --runtime-token is for quick tests.
   const runtimeToken = options['--runtime-token-file'] ? (await privateRead(path.resolve(options['--runtime-token-file']))).trim() : options['--runtime-token'] ?? process.env.BRAINKIT_RUNTIME_TOKEN;
   // The explicit flag wins; otherwise the choice last made (flag or app) persists in the state directory.
-  const runtimeName = options['--runtime'] ?? (RUNTIME_IDS.includes(saved.runtime) ? saved.runtime : 'codex');
+  const plugins = pluginOptions(options, RUNTIME_IDS);
+  const runtimeName = startupRuntime(options, saved, plugins);
   const { toolServers, hostContext } = await loadHostFiles(options);
+  const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], runtimeUrl: options['--runtime-url'], runtimeToken, toolServers, plugins };
   const build = name => createRuntime(name, runtimeOptions);
   const instructions = withHostContext(voiceInstructions(options['--assistant-name']), hostContext);
-  const session = new Session({ runtime: build(runtimeName), cwd, saved, createRuntime: build, instructions, toolServers, save: state => saveState(directory, { ...state, cwd }) });
-  const server = createServer({ session, token });
+  const session = new Session({ runtime: await build(runtimeName), cwd, saved, createRuntime: build, instructions, toolServers, save: state => saveState(directory, { ...state, cwd }) });
+  const server = createServer({ session, token, runtimes: [...RUNTIME_IDS, ...Object.keys(plugins)] });
   // Bind before creating a thread: a second companion on this port must not create work.
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   const stop = () => { session.runtime.close(); server.closeAllConnections(); server.close(); };

@@ -121,3 +121,22 @@ final class FakeRuntimeControl: CompanionRuntimeControl {
 func drainTasks() async {
     for _ in 0..<50 { await Task.yield() }
 }
+
+/// Writes a runtime plugin folder `<runtimes>/<id>` with `runtime.json` (the `manifest`, with
+/// `schema`, `id`, `title`, `version`, `adapter` and `executable` filled in when missing) and
+/// an empty `adapter.mjs`, owned by this user and writable by no one else.
+@discardableResult
+func writePlugin(_ id: String, in runtimes: URL, manifest: [String: Any] = [:]) throws -> URL {
+    let folder = runtimes.appendingPathComponent(id, isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    var value: [String: Any] = ["schema": 1, "id": id, "title": "Example Agent", "version": "1.0.0",
+                                "adapter": "adapter.mjs", "executable": id]
+    value.merge(manifest) { $1 }
+    try JSONSerialization.data(withJSONObject: value).write(to: folder.appendingPathComponent("runtime.json"))
+    try Data("export default () => null;\n".utf8).write(to: folder.appendingPathComponent("adapter.mjs"))
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+    for file in ["runtime.json", "adapter.mjs"] {
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: folder.appendingPathComponent(file).path)
+    }
+    return folder
+}

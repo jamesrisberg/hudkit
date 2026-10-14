@@ -12,6 +12,7 @@ final class BrainServiceTests: XCTestCase {
     private var nodeOutput = "v22.3.0\n"
     private var files: Set<String> = ["/opt/homebrew/bin/node", "/opt/homebrew/bin/codex", "/Users/test/.local/bin/claude"]
     private var control: FakeRuntimeControl!
+    private var runtimes: URL!
 
     override func setUpWithError() throws {
         root = try temporaryDirectory("service")
@@ -24,6 +25,7 @@ final class BrainServiceTests: XCTestCase {
         scheduler = FakeScheduler()
         versionCalls = []
         control = FakeRuntimeControl()
+        runtimes = root.appendingPathComponent("Runtimes", isDirectory: true)
     }
 
     override func tearDownWithError() throws {
@@ -36,7 +38,8 @@ final class BrainServiceTests: XCTestCase {
             launcher: launcher, scheduler: scheduler,
             locator: { [unowned self] in
                 ExecutableLocator(path: "/usr/bin:/bin", home: "/Users/test",
-                                  isExecutable: { [files] in files.contains($0) }, contentsOfDirectory: { _ in [] })
+                                  isExecutable: { [files] in files.contains($0) }, contentsOfDirectory: { _ in [] },
+                                  runtimesDirectory: runtimes.relativePath)
             },
             nodeVersion: { [unowned self] node in
                 versionCalls.append(node)
@@ -101,11 +104,123 @@ final class BrainServiceTests: XCTestCase {
         ])
     }
 
+    private let example = AgentRuntime(rawValue: "example-agent")!
+
+    func testAPluginIsPassedWhenTrustedAndFoundOrOverridden() throws {
+        let folder = try writePlugin("example-agent", in: runtimes)
+        files.insert("/Users/test/.local/bin/example-agent")
         let service = make()
+        service.configure(configuration(example))
         let arguments = try XCTUnwrap(launcher.specs.last?.arguments)
+        XCTAssertEqual(Array(arguments.suffix(6)), [
+            "--runtime-plugin", "example-agent=\(folder.path)",
+            "--runtime-executable", "example-agent=/Users/test/.local/bin/example-agent", "--runtime", "example-agent",
+        ])
+        XCTAssertEqual(service.detections[example]?.executable, "/Users/test/.local/bin/example-agent")
+        XCTAssertEqual(service.detections[example]?.title, "Example Agent")
+        XCTAssertEqual(service.detections[.codex]?.title, "Codex")
+        XCTAssertTrue(launcher.specs.last?.environment["PATH"]?.contains("/Users/test/.local/bin") == true)
+        var custom = configuration(example)
+        custom.pluginExecutablePaths = ["example-agent": "/custom/example"]
+        files.insert("/custom/example")
         let other = make()
         other.configure(custom)
-        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(4)),
+        XCTAssertEqual(Array(try XCTUnwrap(launcher.specs.last?.arguments).suffix(6)), [
+            "--runtime-plugin", "example-agent=\(folder.path)",
+            "--runtime-executable", "example-agent=/custom/example", "--runtime", "example-agent",
+        ])
+        // Another runtime still gets the plugin, so the companion can switch to it.
+        let third = make()
+        third.configure(configuration(.codex))
+        XCTAssertTrue(try XCTUnwrap(launcher.specs.last?.arguments).contains("--runtime-plugin"))
+    }
+
+    /// Rewrites only the plugin's `runtime.json` with a new `version`; the adapter is untouched.
+    private func bumpVersion(_ id: String, to version: String) throws {
+        let file = runtimes.appendingPathComponent("\(id)/runtime.json")
+        var value = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        value["version"] = version
+        try JSONSerialization.data(withJSONObject: value).write(to: file)
+    }
+
+    /// A service running `runtime`, ready, with the example plugin installed and found.
+    private func runningWithPlugin(_ runtime: AgentRuntime) throws -> BrainService {
+        try writePlugin("example-agent", in: runtimes)
+        files.insert("/Users/test/.local/bin/example-agent")
+        let service = make()
+        service.configure(configuration(runtime))
+        try writeToken(String(repeating: "f", count: 64), to: root.appendingPathComponent("state/token"))
+        launcher.last.say("Brain companion ready at")
+        return service
+    }
+
+    func testUpgradingTheChosenPluginRestartsTheCompanionOnRefresh() throws {
+        let service = try runningWithPlugin(example)
+        service.refreshDetections()
+        XCTAssertEqual(launcher.launched.count, 1, "nothing changed")
+        // Only the version: the adapter file is the same.
+        try bumpVersion("example-agent", to: "2.0.0")
+        service.refreshDetections()
+        XCTAssertTrue(launcher.launched[0].terminated)
+        launcher.launched[0].exit(0)
+        XCTAssertEqual(launcher.launched.count, 2)
+        XCTAssertEqual(service.detections[example]?.plugin?.version, "2.0.0")
+    }
+
+    func testAPluginThatIsNotChosenChangesWithoutARestartUntilItIsChosen() throws {
+        let service = try runningWithPlugin(.codex)
+        try bumpVersion("example-agent", to: "2.0.0")
+        try writePlugin("other-agent", in: runtimes)
+        files.insert("/Users/test/.local/bin/other-agent")
+        service.refreshDetections()
+        XCTAssertEqual(launcher.launched.count, 1)
+        XCTAssertFalse(launcher.launched[0].terminated, "a running turn is never cut for a plugin nobody uses")
+        // The next start knows both plugins as they are now.
+        XCTAssertTrue(try XCTUnwrap(service.service.spec?.arguments).contains("other-agent=\(runtimes.appendingPathComponent("other-agent").path)"))
+        // Choosing a plugin the running companion was started without (here, an older version) restarts it.
+        service.configure(configuration(example))
+        scheduler.advance(0.4)
+        XCTAssertTrue(launcher.launched[0].terminated)
+        launcher.launched[0].exit(0)
+        XCTAssertEqual(launcher.launched.count, 2)
+        launcher.last.say("Brain companion ready at")
+        // Back to Codex, and to a plugin the companion now knows: runtime switches, no restart.
+        service.configure(configuration(.codex))
+        scheduler.advance(0.4)
+        service.configure(configuration(AgentRuntime(rawValue: "other-agent")!))
+        scheduler.advance(0.4)
+        XCTAssertEqual(launcher.launched.count, 2)
+        XCTAssertFalse(launcher.last.terminated)
+    }
+
+    func testARelativePluginsFolderIsReportedAndReadsNoPlugins() throws {
+        runtimes = URL(fileURLWithPath: "relative/Runtimes")
+        let service = make()
+        service.configure(configuration(.codex))
+        XCTAssertEqual(service.runtimePluginsProblem,
+                       "The runtime plugins folder relative/Runtimes (BRAINKIT_RUNTIMES_DIR) is not an absolute path.")
+        XCTAssertFalse(try XCTUnwrap(launcher.specs.last?.arguments).contains("--runtime-plugin"))
+    }
+
+    func testAPluginThatIsRefusedOrMissingIsNotPassedAndCannotBeChosen() throws {
+        let folder = try writePlugin("example-agent", in: runtimes)
+        let service = make()
+        service.configure(configuration(example))
+        XCTAssertEqual(service.service.state, .unavailable("Example Agent is not installed."))
+        XCTAssertEqual(launcher.launched.count, 0)
+        files.insert("/Users/test/.local/bin/example-agent")
+        try FileManager.default.setAttributes([.posixPermissions: 0o777], ofItemAtPath: folder.path)
+        let refused = make()
+        refused.configure(configuration(example))
+        let detection = try XCTUnwrap(refused.detections[example])
+        XCTAssertFalse(detection.isAvailable)
+        XCTAssertEqual(refused.service.state, .unavailable(try XCTUnwrap(detection.unavailableReason)))
+        refused.configure(nil)
+        refused.configure(configuration(.codex))
+        XCTAssertFalse(try XCTUnwrap(launcher.specs.last?.arguments).contains("--runtime-plugin"))
+        let absent = make()
+        absent.configure(configuration(AgentRuntime(rawValue: "absent-agent")!))
+        XCTAssertEqual(absent.service.state, .unavailable("absent-agent is not installed."))
     }
 
     func testRuntimeOnlyChangeKeepsTheProcessAndOtherChangesRestart() throws {
@@ -148,15 +263,18 @@ final class BrainServiceTests: XCTestCase {
         XCTAssertEqual(control.switches, [])
         XCTAssertEqual(control.endpoints.last, ServiceEndpoint(url: URL(string: "http://127.0.0.1:8791")!,
                                                                token: String(repeating: "f", count: 64)))
+        service.configure(configuration(.hermes))
         await drainTasks()
         XCTAssertEqual(control.switches, [], "not before the debounce")
         scheduler.advance(0.4)
         await drainTasks()
+        XCTAssertEqual(control.switches, [.hermes])
         XCTAssertEqual(launcher.launched.count, 1)
         XCTAssertFalse(launcher.last.terminated)
         // Nothing more is asked once it runs the configured runtime.
         scheduler.advance(10)
         await drainTasks()
+        XCTAssertEqual(control.switches, [.hermes])
     }
 
     func testTheSwitchWaitsForTheTurnToEnd() async throws {

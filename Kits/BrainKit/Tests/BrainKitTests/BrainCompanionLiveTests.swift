@@ -116,4 +116,46 @@ final class BrainCompanionLiveTests: XCTestCase {
         XCTAssertEqual(runtime, "claude", brain.service.log.joined(separator: "\n"))
         XCTAssertEqual(brain.service.processIdentifier, pid, "a runtime change keeps the process")
     }
+
+    func testAPluginFoundByTheServiceRunsInTheCompanion() async throws {
+        guard let node = ExecutableLocator.live.locate("node"),
+              let major = BrainService.runVersion(node).flatMap(ExecutableLocator.nodeMajorVersion),
+              major >= BrainService.minimumNodeMajorVersion
+        else { throw XCTSkip("Node.js \(BrainService.minimumNodeMajorVersion) or later is not installed") }
+        let companion = try XCTUnwrap(BrainCompanion.directory)
+        let root = try temporaryDirectory("live-plugin")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = root.appendingPathComponent("workspace", isDirectory: true)
+        try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+        // The companion's fixture plugin, without its `requires`, in a private Runtimes folder.
+        let runtimes = root.appendingPathComponent("Runtimes", isDirectory: true)
+        let folder = try writePlugin("echo-agent", in: runtimes, manifest: ["title": "Echo Agent"])
+        let adapter = folder.appendingPathComponent("adapter.mjs")
+        try FileManager.default.removeItem(at: adapter)
+        try FileManager.default.copyItem(at: companion.appendingPathComponent("test/fixtures/echo-agent/adapter.mjs"), to: adapter)
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: adapter.path)
+
+        var locator = ExecutableLocator.live
+        locator.runtimesDirectory = runtimes.path
+        let brain = BrainService(locator: { locator })
+        let echo = try XCTUnwrap(AgentRuntime(rawValue: "echo-agent"))
+        brain.configure(BrainServiceConfiguration(
+            runtime: echo, workingDirectory: workspace.path, stateDirectory: root.appendingPathComponent("state").path,
+            port: Int.random(in: 30000...45000), nodePath: node, pluginExecutablePaths: ["echo-agent": "/bin/echo"]))
+        defer { brain.stop() }
+        XCTAssertEqual(brain.detections[echo]?.isAvailable, true, brain.detections[echo]?.unavailableReason ?? "")
+        for _ in 0..<150 where brain.service.state != .running {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(brain.service.state, .running, brain.service.log.joined(separator: "\n"))
+        let client = try XCTUnwrap(brain.makeClient())
+        _ = try await client.submit(text: "hi")
+        var snapshot = try await client.refreshSnapshot()
+        for _ in 0..<50 where snapshot.output.isEmpty {
+            try await Task.sleep(for: .milliseconds(100))
+            snapshot = try await client.refreshSnapshot()
+        }
+        XCTAssertEqual(snapshot.runtime, "echo-agent")
+        XCTAssertEqual(snapshot.output, "echo: hi")
+    }
 }

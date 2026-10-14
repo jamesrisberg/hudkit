@@ -10,7 +10,7 @@ manual mode. Audio stays in the host app's local speech pipeline; this service
 accepts only text. The runtime sends that text and relevant tool context to its
 configured model provider and keeps its own conversation history on disk.
 
-Four runtimes are built in:
+Three runtimes are built in, and runtime plugins add others (see Runtime plugins):
 
 | `--runtime` | Agent | Transport | Folder scope | Approvals | Cancel |
 |---|---|---|---|---|---|
@@ -34,10 +34,12 @@ node server.mjs --cwd "$HOME/AssistantWorkspace" --runtime claude   # Claude Cod
 Flags:
 
 - `--cwd /absolute/path` (required) — the workspace. Never chosen over HTTP.
-- `--runtime codex|hermes|claude` — without it, the runtime last chosen (by flag or
-  by the app) is read from the state directory; the first default is `codex`.
+- `--runtime codex|hermes|claude|<plugin id>` — without it, the runtime last chosen (by
+  flag or by the app) is read from the state directory; the first default is `codex`, and
+  a saved plugin the command line no longer names falls back to it.
 - `--state-dir /absolute/path` — private state (default `~/.brainkit-companion`).
 - `--port 8789` — HTTP port on 127.0.0.1 (default 8788).
+- `--codex /path/to/codex`, `--claude /path/to/claude` —
   executables if not on PATH
   (Homebrew Codex: `--codex /opt/homebrew/bin/codex`).
 - `--runtime-url http://127.0.0.1:8642` — Hermes API server. Plain HTTP only on
@@ -52,6 +54,10 @@ Flags:
   agent gets; see Tool servers and host context.
 - `--host-context /path/host-context.md` (mode 0600) — Markdown describing the host app's
   world, appended to the voice instructions (at most 65,536 characters).
+- `--runtime-plugin <id>=/absolute/plugin/folder` (repeatable) — a runtime plugin; see Runtime
+  plugins. `--runtime-executable <id>=/absolute/path` (repeatable, one per plugin) is the
+  executable found for it; without one the adapter receives `runtime.json`'s `executable`
+  name as given.
 
 Keep the terminal running; the companion does not install a launch agent. A host
 app connects to `http://127.0.0.1:8788` with the 256-bit token the companion creates
@@ -96,14 +102,17 @@ unknown keys, duplicate names and non-string arguments or environment values are
 | Runtime | Tool servers | `requireApproval: false` | `requireApproval: true` |
 |---|---|---|---|
 | `codex` | `codex app-server -c mcp_servers.<name>.command="…" -c mcp_servers.<name>.args=[…] [-c mcp_servers.<name>.env={ "K" = "v" }]` (values are TOML) | `-c mcp_servers.<name>.default_tools_approval_mode="approve"`: no prompt | `…="prompt"`: every call asks (an `mcpServer/elicitation/request` with `_meta.codex_approval_kind: "mcp_tool_call"`, shown as a `tool` approval; Allow answers `{"action":"accept","content":{}}`, Deny `{"action":"decline"}`) |
+| `claude` | added to `--mcp-config` (`mcpServers`, `type: "stdio"`) | `--allowedTools mcp__<name>__*` | Claude Code's normal permission prompt |
 | `hermes` | not supported | | |
+| a plugin | as its adapter passes them (`supportsToolServers`) | | |
 
 Only elicitations from a configured tool server that are tool-call approvals become
 approvals; any other elicitation is refused, which Codex treats as a decline. The host
 context is appended, after a blank line, to the instructions every runtime receives:
-Hermes' run `instructions`. Snapshots report the servers as `toolServers: { names, active,
+Codex's `developerInstructions`, Claude Code's `--append-system-prompt`, Hermes' run
+`instructions`, and a plugin's `start` options. Snapshots report the servers as `toolServers: { names, active,
 note }`; with Hermes `active` is false and `note` says Hermes cannot use them (Hermes only has
-the tools configured in Hermes itself). Tool servers and host context are launch options for
+the tools configured in Hermes itself).
 The Codex form was checked against Codex 0.155.1: with these overrides `config/read` shows the
 servers with their environment and approval mode, and `mcpServerStatus/list` lists a
 configured stdio server's tools, without a model turn.
@@ -235,9 +244,114 @@ approvals when a turn ends.
 5. In BrainKit, add the case to `AgentRuntime` (`Sources/BrainKit/AgentSessionClient.swift`)
    and its entry to `BrainCatalog`.
 
+A runtime that ships apart from BrainKit is a plugin instead (next section).
+
 The state file keeps the active runtime's state at top level, named by `runtime`
 (a file without `runtime` belongs to Codex), and other runtimes' conversations
 under `conversations`, so switching back resumes them.
+
+## Runtime plugins
+
+A runtime plugin adds a runtime without changing BrainKit. It is a folder whose name is the
+runtime's id, normally `~/Library/Application Support/BrainKit/Runtimes/<id>/`; the
+environment variable `BRAINKIT_RUNTIMES_DIR` names another parent folder (tests and isolated
+runs). `BrainService` finds the plugins there, reports them in its detections beside the
+built-in runtimes, and passes each available one (trusted, with its executable and every tool
+it requires found) to the companion with
+`--runtime-plugin <id>=<folder>` and `--runtime-executable <id>=<path>`. Once given, the id
+works everywhere a built-in's does: `--runtime`, `POST /v1/runtime`, the snapshot's `runtime`
+and the state file.
+
+The folder holds `runtime.json`:
+
+```json
+{
+  "schema": 1,
+  "id": "example-agent",
+  "title": "Example Agent",
+  "version": "1.2.0",
+  "adapter": "adapter.mjs",
+  "executable": "example-agent",
+  "searchPaths": ["~/.example-agent/bin"],
+  "installCommand": "brew install example-agent",
+  "loginCommand": "example-agent login",
+  "loginTitle": "Log In",
+  "requires": ["git"],
+  "note": "One line a host may show beside the runtime.",
+  "summary": "A sentence describing the runtime.",
+  "docsURL": "https://example.com/example-agent"
+}
+```
+
+| Field | |
+|---|---|
+| `schema` | `1` |
+| `id` | `^[a-z][a-z0-9-]{0,31}$`, the folder's name, and not a built-in id (`codex`, `hermes`, `claude`) |
+| `title` | the name a host shows |
+| `version` | the plugin's version (semver) |
+| `adapter` | the adapter module, an `.mjs` file inside the folder, relative to it |
+| `executable` | the tool to find: a name looked up like the built-ins' tools (PATH, the common install folders, then `searchPaths`), or an absolute or `~/` path |
+| `searchPaths` | optional extra folders to look in (`~/` allowed) |
+| `installCommand`, `loginCommand`, `loginTitle` | optional shell commands (and the login button's title) a host may offer |
+| `requires` | optional other tools the runtime needs: names looked up like the built-ins' tools, or absolute or `~/` paths; the plugin is unavailable while one is missing, and the reason names it |
+| `note` | optional one line a host may show |
+| `summary`, `docsURL` | optional sentence describing the runtime, and an http(s) link to its documentation |
+
+Unknown keys are ignored.
+
+**Trust.** A plugin is refused unless the folder holding it (`Runtimes`), its own folder and
+every entry inside that folder, at any depth, are each, checked without following links, not a
+symbolic link, owned by the current (effective) user and writable by no one else (no group or
+world write bit); a folder of more than 4096 entries is refused too. The adapter's path must
+stay inside the folder and name an `.mjs` file. BrainKit checks this when it detects plugins; a
+refused plugin still appears in the detections, unavailable, with the reason (the Swift and
+Node checks run in the same order and give the same reasons). The companion checks the whole
+tree again immediately before importing the adapter; a plugin refused then, whose adapter fails
+to load, or whose import and factory take more than 10 seconds, is still selectable, and
+starting it fails with the reason, like any runtime that cannot start.
+
+What the rule does not cover: any process running as the user can install a plugin, and a
+plugin's adapter runs inside the companion, so it acts with the host app's privacy grants
+(Accessibility, Microphone, Full Disk Access, …) and the user's files. A plugin whose id is a
+saved runtime choice loads on the next start without being picked again. Nothing checks the
+folder above `Runtimes`, so a `BRAINKIT_RUNTIMES_DIR` belongs inside a folder only the user can
+write. Side effects of an adapter's top-level code last until the companion restarts. Install
+only plugins you would run as a program.
+
+**Adapter.** The adapter default-exports a factory:
+
+```js
+export default function create(kit, { executable, toolServers, options }) {
+  class ExampleRuntime extends kit.Runtime {
+    static id = 'example-agent';          // must equal runtime.json's id
+    static displayName = 'Example Agent';
+    // start, submit, approve, cancel, reset, … as in Runtime interface above
+  }
+  return new ExampleRuntime();
+}
+```
+
+- `kit` (exported as `kit` from `runtimes/plugins.mjs`) is a frozen object: `{ apiVersion: 1, Runtime, bounded, claude: { describe },
+  toolServers: { allowedToolPatterns, claudeMcpServers } }` — the runtime base class and
+  `bounded` from `runtimes/Runtime.mjs`, Claude Code's tool-call description from
+  `runtimes/claude.mjs`, and the Claude Code tool-server helpers from `tool-servers.mjs`.
+  An adapter imports nothing else from the companion.
+- `executable` is the resolved absolute path from `--runtime-executable` (the host's override
+  when the user set one); `toolServers` the host's validated tool servers, as built-in runtimes
+  receive them; `options` is reserved and `{}`.
+- The factory returns an instance of a `kit.Runtime` subclass whose `id` is the plugin's id;
+  the session keys the saved conversation and the snapshot by that id. The factory may be
+  async. A runtime returned with another id, or that is not a `kit.Runtime`, is closed and the
+  plugin reported unavailable.
+- `persistentState()` shares the state file's top level; its keys `permissions`, `requestIds`,
+  `receipt`, `runtime`, `conversations`, `cwd` and `threadId` are ignored.
+- The companion imports the adapter once, when the runtime is first chosen. At its next
+  detection (a configuration change or `refreshDetections()`), `BrainService` restarts the
+  companion when the chosen plugin is one it was started without, or whose folder, executable,
+  `version` or adapter file's modification time changed since; a plugin that is not chosen
+  waits for the next start.
+
+`test/fixtures/echo-agent/` is a complete minimal plugin, exercised by `test/plugins.test.mjs`.
 
 ## HTTP contract
 
@@ -267,6 +381,7 @@ polls complete snapshots so missed polls do not lose approvals.
 - `POST /v1/cancel` with `{}` — request interruption; subsequent snapshots confirm it.
   Returns 409 if the runtime cannot interrupt.
 - `POST /v1/session/reset` with `{}` — start a new conversation while idle.
+- `POST /v1/runtime` with `{ "runtime": "codex" | "hermes" | "claude" | "<plugin id>" }` — switch
   runtime while idle (409 otherwise), or restart the current one after a failure.
   Only the name crosses HTTP; executables, URLs and tokens come from the command
   line. Permissions and recent request IDs carry over; each runtime's conversation
@@ -278,6 +393,7 @@ Snapshots contain `threadId`, `turnId`, `status`, `output`, `progress`, `approva
 `requestId`, `route`, `timing`, `permissions` (mode and approved folders),
 `routing`, then `runtime` (the runtime ID), `capabilities`
 (`approvals`, `folderScope`, `modelRouting`, `cancel`) and `sessionKey` (the external
+session the runtime drives, in the runtime's own form, or null), and `toolServers`
 (`names`, `active`, `note`; see Tool servers and host context). The fields before `runtime`
 keep a fixed order and encoding, and new fields are only appended after them
 (`test/snapshot-compat.test.mjs`).
@@ -309,7 +425,11 @@ Runs API and SSE (deltas, progress, approval round trip, stop, degraded
 capabilities, dropped stream, restart), the Claude adapter against a fake `claude`
 that launches the real MCP permission bridge (streaming, resume, approvals, SIGINT
 cancel, crash, permission modes, socket authentication), tool servers and host context
-relaunch on a change), runtime switching, HTTP
+(validation, the exact Codex `-c` and Claude `--mcp-config`/`--allowedTools` arguments, Codex
+MCP tool-call approvals, private host files, the Hermes note), runtime switching, what a runtime
+driving an external session relies on (turns and approvals from another client, state persisted
+before `start` returns, reserved state keys), runtime plugins (`runtime.json`, the trust refusals,
+the kit, and the fixture plugin through a session and a spawned companion), HTTP
 auth/Host/Origin checks, body limits, file permissions, and snapshot byte
 compatibility. The smoke test initializes the installed Codex protocol and reads
 signed-in status; it does not start a model turn.

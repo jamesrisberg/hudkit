@@ -5,6 +5,17 @@ import { bounded } from './runtimes/Runtime.mjs';
 import { voiceInstructions } from './voice-instructions.mjs';
 
 const ACTIVE = ['running', 'approval'];
+/**
+ * The state file's own keys. A runtime's `persistentState()` shares the file's top level, so
+ * these are dropped from it: a runtime (a plugin above all) can never overwrite the saved
+ * permissions, the workspace, request IDs, the receipt or another runtime's conversation.
+ */
+const RESERVED_STATE = ['permissions', 'requestIds', 'receipt', 'runtime', 'conversations', 'cwd', 'threadId'];
+/** `state` without the reserved keys (and without anything that is not a plain object). */
+export function runtimeState(state) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return {};
+  return Object.fromEntries(Object.entries(state).filter(([key]) => !RESERVED_STATE.includes(key)));
+}
 const RUNTIME_EVENTS = ['started', 'output', 'progress', 'approval', 'approvalResolved', 'completed', 'failed', 'cancelled', 'notice', 'disconnected', 'persist'];
 
 /**
@@ -22,11 +33,11 @@ export class Session {
     // A state file without `runtime` belongs to Codex.
     this.conversations = saved.conversations && typeof saved.conversations === 'object' ? { ...saved.conversations } : {};
     const savedRuntime = typeof saved.runtime === 'string' ? saved.runtime : 'codex';
-    const { permissions: _p, requestIds: _r, receipt: _c, runtime: _n, conversations: _s, cwd: _w, ...runtimeState } = saved;
+    const { permissions: _p, requestIds: _r, receipt: _c, runtime: _n, conversations: _s, cwd: _w, ...ownState } = saved;
     let receipt = saved.receipt ?? null;
-    if (savedRuntime === runtime.id) this.runtimeSaved = runtimeState;
+    if (savedRuntime === runtime.id) this.runtimeSaved = ownState;
     else {
-      if (runtimeState.threadId) this.conversations[savedRuntime] = runtimeState;
+      if (ownState.threadId) this.conversations[savedRuntime] = ownState;
       this.runtimeSaved = this.conversations[runtime.id] ?? {};
       // A receipt refers to the other runtime's turns and can never label this one's.
       receipt = null;
@@ -51,6 +62,7 @@ export class Session {
     const names = this.toolServerNames;
     const active = names.length > 0 && this.runtime.supportsToolServers;
     const note = names.length && !active
+      ? `${this.runtime.displayName} cannot use this app's tools (${names.join(', ')}); it only has the tools configured in ${this.runtime.displayName} itself. Choose a runtime that takes tool servers, such as Codex or Claude, to use them.`
       : null;
     return { names: [...names], active, note };
   }
@@ -58,6 +70,7 @@ export class Session {
     const handlers = {
       started: ({ turnId }) => {
         // A turn nobody submitted here was started in another client of the same session
+        // (a runtime that drives an external session): it belongs to no request and replaces the last answer.
         if (!this.busy && !ACTIVE.includes(this.state.status)) {
           this.approvals.clear();
           return this.update({ turnId, status: 'running', requestId: null, route: null, timing: null, output: '', error: null, approvals: [], progress: 'Working' });
@@ -74,7 +87,7 @@ export class Session {
       notice: ({ error }) => this.update({ error: bounded(error || 'Agent error') }),
       persist: () => {
         // Before start() returns, persist() writes what was saved for the runtime; keep that current.
-        if (!this.started) this.runtimeSaved = { ...this.runtimeSaved, ...runtime.persistentState() };
+        if (!this.started) this.runtimeSaved = { ...this.runtimeSaved, ...runtimeState(runtime.persistentState()) };
         this.persist().catch(error => this.update({ error: bounded(`Unable to save session state: ${error.message}`) }));
       },
       disconnected: error => {
@@ -113,9 +126,8 @@ export class Session {
   }
   async persist(permissions = this.permissions) {
     // A runtime that never started knows nothing yet: keep what was saved for it.
-    const runtimeState = this.started ? this.runtime.persistentState() : { ...this.runtimeSaved };
-    delete runtimeState.threadId;
-    await this.save({ permissions, ...runtimeState, threadId: this.state.threadId,
+    const saved = this.started ? runtimeState(this.runtime.persistentState()) : runtimeState(this.runtimeSaved);
+    await this.save({ permissions, ...saved, threadId: this.state.threadId,
       requestIds: [...this.seenRequests].slice(-256), receipt: this.receipt ? { ...this.receipt } : null,
       runtime: this.runtime.id, conversations: this.conversations });
   }
@@ -261,9 +273,9 @@ export class Session {
     if (name === this.runtime.id && this.ready) return this.snapshot();
     this.busy = true;
     try {
-      const next = this.createRuntime(name);
+      const next = await this.createRuntime(name);
       const previous = this.runtime; const restart = previous.id === next.id;
-      if (this.state.threadId) this.conversations[previous.id] = { ...(this.started ? previous.persistentState() : this.runtimeSaved), threadId: this.state.threadId };
+      if (this.state.threadId) this.conversations[previous.id] = { ...runtimeState(this.started ? previous.persistentState() : this.runtimeSaved), threadId: this.state.threadId };
       this.unbind(); previous.close();
       // Restarting the same runtime keeps the receipt so an uncertain request can still
       // be reconciled against the resumed conversation; another runtime never can.

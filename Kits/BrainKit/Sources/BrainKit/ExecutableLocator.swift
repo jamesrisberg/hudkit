@@ -2,31 +2,57 @@ import Foundation
 
 /// Finds command-line tools the way a login shell would, without running one. Apps
 /// launched from Finder get a minimal PATH, so common install folders are searched too.
-/// Every input is injectable for tests.
+/// Every input is injectable for tests; runtime plugins are read from `runtimesDirectory`
+/// on disk (`runtimePlugins()`).
 public struct ExecutableLocator {
     public var path: String
     public var home: String
     public var isExecutable: (String) -> Bool
     public var contentsOfDirectory: (String) -> [String]
+    /// The folder holding runtime plugins, one folder per plugin named by its id.
+    public var runtimesDirectory: String
 
+    /// `runtimesDirectory` nil is `<home>/Library/Application Support/BrainKit/Runtimes`.
     public init(path: String, home: String, isExecutable: @escaping (String) -> Bool,
-                contentsOfDirectory: @escaping (String) -> [String]) {
+                contentsOfDirectory: @escaping (String) -> [String], runtimesDirectory: String? = nil) {
         self.path = path
         self.home = home
         self.isExecutable = isExecutable
         self.contentsOfDirectory = contentsOfDirectory
+        self.runtimesDirectory = runtimesDirectory ?? Self.defaultRuntimesDirectory(home: home, environment: [:])
     }
 
+    /// The environment's PATH, home and `BRAINKIT_RUNTIMES_DIR`, and the real file system.
     public static var live: ExecutableLocator {
-        ExecutableLocator(
-            path: ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin",
-            home: FileManager.default.homeDirectoryForCurrentUser.path,
+        let environment = ProcessInfo.processInfo.environment
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return ExecutableLocator(
+            path: environment["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin",
+            home: home,
             isExecutable: { path in
                 var isDirectory: ObjCBool = false
                 return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
                     && !isDirectory.boolValue && FileManager.default.isExecutableFile(atPath: path)
             },
-            contentsOfDirectory: { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] })
+            contentsOfDirectory: { (try? FileManager.default.contentsOfDirectory(atPath: $0)) ?? [] },
+            runtimesDirectory: defaultRuntimesDirectory(home: home, environment: environment))
+    }
+
+    /// `BRAINKIT_RUNTIMES_DIR` when set (tests and isolated runs; `~/` expanded, an absolute
+    /// path normalized), otherwise `<home>/Library/Application Support/BrainKit/Runtimes`. A
+    /// relative value is returned as given, and `runtimesDirectoryProblem` reports it.
+    public static func defaultRuntimesDirectory(home: String, environment: [String: String]) -> String {
+        guard let value = environment["BRAINKIT_RUNTIMES_DIR"], !value.isEmpty else {
+            return "\(home)/Library/Application Support/BrainKit/Runtimes"
+        }
+        let expanded = value.hasPrefix("~/") ? home + value.dropFirst() : value
+        return expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded).standardized.path : expanded
+    }
+
+    /// Why no plugin is read from `runtimesDirectory`, or nil: it must be an absolute path.
+    public var runtimesDirectoryProblem: String? {
+        runtimesDirectory.hasPrefix("/") ? nil
+            : "The runtime plugins folder \(runtimesDirectory) (BRAINKIT_RUNTIMES_DIR) is not an absolute path."
     }
 
     /// Install folders used by Homebrew, the official installers and common version managers.
@@ -55,18 +81,24 @@ public struct ExecutableLocator {
     }
 
     /// An explicit override wins when it is executable; an unusable override is not
-    /// silently replaced, so the caller can report it.
-    public func locate(_ name: String, override: String = "") -> String? {
+    /// silently replaced, so the caller can report it. `additionalDirectories` (`~/` allowed)
+    /// are searched after the usual ones.
+    public func locate(_ name: String, override: String = "", additionalDirectories: [String] = []) -> String? {
         let explicit = override.trimmingCharacters(in: .whitespacesAndNewlines)
         if !explicit.isEmpty {
-            let expanded = explicit.hasPrefix("~/") ? home + explicit.dropFirst() : explicit
+            let expanded = expandingHome(explicit)
             return isExecutable(expanded) ? expanded : nil
         }
-        for directory in searchDirectories {
+        for directory in searchDirectories + additionalDirectories.map(expandingHome) {
             let candidate = "\(directory)/\(name)"
             if isExecutable(candidate) { return candidate }
         }
         return nil
+    }
+
+    /// `~/x` as a path in `home`; any other path unchanged.
+    public func expandingHome(_ path: String) -> String {
+        path.hasPrefix("~/") ? home + path.dropFirst() : path
     }
 
     /// PATH for child processes: the tool's own folder first so shebangs such as
@@ -94,6 +126,8 @@ public struct ExecutableLocator {
 }
 
 /// What BrainKit knows about each installable brain: how to find, install and sign in to it.
+/// The built-in runtimes have entries here; a runtime plugin describes itself in its
+/// `runtime.json` (`RuntimePlugin`).
 public enum BrainCatalog {
     public struct Entry: Sendable {
         public let runtime: AgentRuntime
@@ -120,7 +154,6 @@ public enum BrainCatalog {
             loginCommand: "claude", loginTitle: "Log In",
             docsURL: URL(string: "https://docs.claude.com/en/docs/claude-code/setup")!),
         Entry(
-        Entry(
             runtime: .codex, executable: "codex",
             summary: "OpenAI's Codex CLI. Uses your ChatGPT account or API key.",
             installCommand: "brew install --cask codex || npm install -g @openai/codex",
@@ -128,30 +161,117 @@ public enum BrainCatalog {
             docsURL: URL(string: "https://developers.openai.com/codex/cli")!),
     ]
 
-    public static func entry(for runtime: AgentRuntime) -> Entry {
-        entries.first { $0.runtime == runtime }!
+    /// The built-in runtime's entry; nil for a plugin.
+    public static func entry(for runtime: AgentRuntime) -> Entry? {
+        entries.first { $0.runtime == runtime }
     }
 
+    /// One runtime as this Mac has it, built-in or plugin.
     public struct Detection: Equatable, Sendable {
         public let runtime: AgentRuntime
+        /// The name to show: the built-in's name or the plugin's title.
+        public let title: String
+        /// The executable found (or the override given); nil when none is.
         public let executable: String?
         /// Hermes only: whether `~/.hermes/.env` enables the API server the companion talks to.
         public let apiServerEnabled: Bool?
+        public let installCommand: String?
+        public let loginCommand: String?
+        public let loginTitle: String?
+        /// A plugin's one-line note.
+        public let note: String?
+        /// A sentence describing the runtime, and its documentation.
+        public let summary: String?
+        public let docsURL: URL?
+        /// The plugin's `requires` that were not found; the plugin is unavailable until they are.
+        public let missingRequirements: [String]
+        /// Why a plugin cannot be used even if its executable is found (the trust rule or an
+        /// invalid `runtime.json`), or why no plugin of this id exists.
+        public let refusal: String?
+        /// The plugin; nil for a built-in runtime.
+        public let plugin: RuntimePlugin?
+
         public var isInstalled: Bool { executable != nil }
+        /// Installed, not refused and with everything it requires: `BrainService` gives the
+        /// companion only these plugins.
+        public var isAvailable: Bool { unavailableReason == nil }
+
+        /// Why the runtime cannot be used, or nil when it can.
+        public var unavailableReason: String? {
+            if let refusal { return refusal.hasSuffix(".") ? refusal : refusal + "." }
+            guard executable != nil else { return "\(title) is not installed." }
+            guard missingRequirements.isEmpty else {
+                return "\(title) needs \(missingRequirements.joined(separator: ", ")), which \(missingRequirements.count == 1 ? "is" : "are") not installed."
+            }
+            return nil
+        }
     }
 
+    /// Detects one runtime: a built-in from its catalog entry, anything else from its plugin
+    /// folder in `locator.runtimesDirectory`.
     public static func detect(
         _ runtime: AgentRuntime, locator: ExecutableLocator, override: String = "",
         readFile: (String) -> String? = { try? String(contentsOfFile: $0, encoding: .utf8) }
     ) -> Detection {
-        let executable = locator.locate(entry(for: runtime).executable, override: override)
+        guard let entry = entry(for: runtime) else {
+            let folder = "\(locator.runtimesDirectory)/\(runtime.rawValue)"
+            var info = stat()
+            let absent = lstat(folder, &info) != 0 && errno == ENOENT
+            let notInstalled = RuntimePlugin(refused: runtime, directory: folder, reason: "No runtime plugin \(runtime.rawValue) is installed")
+            let plugin = absent ? notInstalled : RuntimePlugin.read(runtime.rawValue, in: folder) ?? notInstalled
+            return detect(plugin: plugin, locator: locator, override: override)
+        }
+        let executable = locator.locate(entry.executable, override: override)
         var apiServer: Bool?
         if runtime == .hermes {
             let hermesHome = ProcessInfo.processInfo.environment["HERMES_HOME"].flatMap { $0.isEmpty ? nil : $0 }
                 ?? "\(locator.home)/.hermes"
             apiServer = readFile("\(hermesHome)/.env").map(hermesAPIServerEnabled) ?? false
         }
-        return Detection(runtime: runtime, executable: executable, apiServerEnabled: apiServer)
+        return Detection(
+            runtime: runtime, title: runtime.displayName, executable: executable, apiServerEnabled: apiServer,
+            installCommand: entry.installCommand, loginCommand: entry.loginCommand,
+            loginTitle: entry.loginCommand == nil ? nil : entry.loginTitle,
+            note: nil, summary: entry.summary, docsURL: entry.docsURL, missingRequirements: [], refusal: nil, plugin: nil)
+    }
+
+    /// Detects a plugin: its executable (`override` wins, then its `runtime.json` path or name,
+    /// searched like the built-ins' tools and then in its `searchPaths`) and its `requires`
+    /// (searched like the built-ins' tools).
+    /// A refused plugin is reported with its reason and nothing located.
+    public static func detect(plugin: RuntimePlugin, locator: ExecutableLocator, override: String = "") -> Detection {
+        var executable: String?
+        var missing: [String] = []
+        if plugin.isTrusted {
+            let explicit = override.trimmingCharacters(in: .whitespacesAndNewlines)
+            if explicit.isEmpty, plugin.executable.hasPrefix("/") || plugin.executable.hasPrefix("~/") {
+                executable = locator.locate(plugin.executable, override: plugin.executable)
+            } else {
+                executable = locator.locate(plugin.executable, override: override,
+                                            additionalDirectories: plugin.searchPaths)
+            }
+            missing = plugin.requires.filter { tool in
+                let isPath = tool.hasPrefix("/") || tool.hasPrefix("~/")
+                return locator.locate(tool, override: isPath ? tool : "") == nil
+            }
+        }
+        return Detection(
+            runtime: plugin.runtime, title: plugin.title, executable: executable, apiServerEnabled: nil,
+            installCommand: plugin.installCommand, loginCommand: plugin.loginCommand,
+            loginTitle: plugin.loginCommand == nil ? nil : plugin.loginTitle ?? "Log In", note: plugin.note,
+            summary: plugin.summary, docsURL: plugin.docsURL,
+            missingRequirements: missing, refusal: plugin.refusal, plugin: plugin)
+    }
+
+    /// The built-in runtimes, then every plugin in `locator.runtimesDirectory` by id (a folder
+    /// named like a built-in is left out). `overrides` are executable paths by runtime.
+    public static func detectAll(
+        locator: ExecutableLocator, overrides: [AgentRuntime: String] = [:],
+        readFile: (String) -> String? = { try? String(contentsOfFile: $0, encoding: .utf8) }
+    ) -> [Detection] {
+        AgentRuntime.builtIns.map { detect($0, locator: locator, override: overrides[$0] ?? "", readFile: readFile) }
+            + locator.runtimePlugins().filter { !$0.runtime.isBuiltIn }
+            .map { detect(plugin: $0, locator: locator, override: overrides[$0.runtime] ?? "") }
     }
 
     /// Reads `API_SERVER_ENABLED` from a Hermes `.env` file (read only; never modified).

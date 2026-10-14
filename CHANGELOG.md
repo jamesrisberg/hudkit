@@ -7,6 +7,51 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Added
+- BrainKit runtime plugins: an agent runtime installed apart from BrainKit, offered beside Codex,
+  Claude Code and Hermes. A plugin is a folder
+  `~/Library/Application Support/BrainKit/Runtimes/<id>/` (or under `BRAINKIT_RUNTIMES_DIR`,
+  which may start with `~/` and must be absolute) with a `runtime.json` (id, title, version,
+  adapter, the executable to find and where, optional install and login commands, required
+  tools, a note, summary and docs link) and an `.mjs` adapter module whose factory receives a
+  small kit of companion helpers. A plugin is used only when the `Runtimes` folder, the
+  plugin's folder and everything in it belong to the user, nobody else can write them and none
+  is a symbolic link; otherwise it is listed with the reason. Any program running as the user
+  can install one, and it runs with the host app's permissions.
+- `BrainService` reports plugins in `detections`, passes each available one to the companion
+  (`--runtime-plugin`, `--runtime-executable`), and restarts the companion when the chosen
+  plugin is new to it or its version or adapter changed (also on `refreshDetections()`); a
+  plugin that is not chosen never restarts it. `BrainService.runtimePluginsProblem` says why no plugin is read.
+- New API: `RuntimePlugin`; `BrainCatalog.detect(plugin:locator:override:)` and
+  `BrainCatalog.detectAll(locator:overrides:readFile:)`; `ExecutableLocator.runtimesDirectory`,
+  `runtimesDirectoryProblem`, `runtimePlugins()`, `defaultRuntimesDirectory(home:environment:)`,
+  `expandingHome(_:)` and `locate(_:override:additionalDirectories:)`; `AgentRuntime.builtIns`,
+  `isBuiltIn` and `isValidID(_:)`; `BrainCatalog.Detection` fields `title`, `installCommand`,
+  `loginCommand`, `loginTitle`, `note`, `summary`, `docsURL`, `missingRequirements`, `refusal`,
+  `plugin`, `isAvailable` and `unavailableReason`; `BrainSettings.plugins` (each plugin's
+  executable override, `BrainSettings.PluginOptions`).
+
+### Changed
+- `hud-icon.sh` takes an app's icon from the app repo's own `Icons/<repo>.svg` when it has one,
+  before `Icons/<repo>.svg` in HUDKit and the template placeholder.
+- `AgentRuntime` is a struct holding a runtime id rather than an enum: `.codex`, `.hermes` and
+  `.claude` work as before and a plugin's id is a runtime too. A `switch` over it needs a
+  `default`, and `AgentRuntime.allCases` is now `AgentRuntime.builtIns`.
+  `AgentRuntime(rawValue:)` accepts any valid id, so `BrainSettings` keeps a chosen plugin that is
+  not installed (the service says why it cannot run) and only an invalid id decodes to Codex.
+- `BrainCatalog.entry(for:)` returns an optional (nil for a plugin).
+- `BrainServiceConfiguration.init` takes `pluginExecutablePaths:` in place of the removed
+  runtime's path label.
+- A runtime's saved state can no longer overwrite the companion state file's own keys
+  (permissions, request IDs, the receipt, conversations).
+
+### Removed
+- BrainKit's fourth built-in runtime, with its `BrainSettings` key and options type,
+  `BrainServiceConfiguration`'s path for it and the companion's flag; such a runtime is now a
+  plugin. Its saved options are not carried over. A saved choice of it stays selected, as the id
+  of a plugin that is not installed: the brain reports "No runtime plugin <id> is installed."
+  until the user installs the plugin or picks another runtime.
+
 ## [0.4.0] - 2026-10-13
 
 ### Changed
@@ -208,8 +253,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `HUDTextFeed` (see `docs/CONTRACT.md` § Text feed).
 
 **BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
-  behind a Node.js companion (Node 22 or later, no npm packages) that ships inside BrainKit with
-  its tests.
+- A local agent brain for any app: Codex, Claude Code or Hermes behind a Node.js companion
+  (Node 22 or later, no npm packages) that ships inside BrainKit with its tests.
 - `BrainService` finds Node.js, launches and supervises the companion from a plain
   `BrainServiceConfiguration` (runtime, workspace, state directory, port, tool paths, assistant
   name), restarts it with backoff, stops it with the app, and hands out `AgentSessionClient`s.
@@ -221,8 +266,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `BrainCatalog`.
 - The companion's `--assistant-name` names the assistant in its voice instructions; without it
   the instructions name none. Its environment variables use the `BRAINKIT_` prefix.
-  snapshots name the session (`sessionKey`).
+- BrainKit: snapshots name the external session a runtime drives, if any (`sessionKey`).
 - BrainKit: a host can give its brain tools (`toolServers`, stdio MCP servers) and a description
+  of its world (`hostContext`); Codex and Claude Code use them, Hermes reports it cannot.
 
 **Build**
 - `hud-build.sh` builds the executable products named in `HUD_HELPERS` and ships each in

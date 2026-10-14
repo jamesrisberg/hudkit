@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "id": "echo-agent",
+  "title": "Echo Agent",
+  "version": "1.0.0",
+  "adapter": "adapter.mjs",
+  "executable": "echo-agent",
+  "searchPaths": ["~/echo-agent/bin"],
+  "installCommand": "echo install echo-agent",
+  "loginCommand": "echo-agent login",
+  "loginTitle": "Sign In",
+  "requires": ["git"],
+  "note": "Answers every turn with its own text.",
+  "summary": "A runtime plugin for the tests.",
+  "docsURL": "https://example.com/echo-agent",
+  "later": "unknown keys are ignored"
+}

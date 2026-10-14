@@ -93,13 +93,13 @@ test('approvals from a runtime get opaque IDs and are declined when not expected
   assert.equal(session.snapshot().status, 'failed'); assert.equal(session.snapshot().error, 'boom');
 });
 
-test('command line selects a known runtime once; unknown runtimes are rejected before any work', () => {
+test('command line selects a known runtime once; unknown runtimes are rejected before any work', async () => {
   assert.deepEqual(parseArguments(['--cwd', '/w', '--runtime', 'codex', '--runtime-url', 'http://127.0.0.1:8642']), { '--cwd': '/w', '--runtime': 'codex', '--runtime-url': 'http://127.0.0.1:8642' });
   assert.throws(() => parseArguments(['--cwd', '/w', '--runtime', 'gpt']), /--runtime must be one of/);
   assert.throws(() => parseArguments(['--cwd', '/w', '--cwd', '/x']), /Usage/);
   assert.throws(() => parseArguments(['--runtime-token', 'a', '--runtime-token-file', '/b']), /either/);
-  assert.throws(() => createRuntime('gpt'), { status: 400 });
-  assert.equal(createRuntime('codex').id, 'codex');
+  await assert.rejects(createRuntime('gpt'), { status: 400 });
+  assert.equal((await createRuntime('codex')).id, 'codex');
 });
 
 test('a runtime that fails to start keeps its saved conversation; a retry resumes it and keeps the receipt', async () => {

@@ -1,7 +1,9 @@
 import Foundation
 
 /// A stdio MCP server the host gives its brain: the agent can call its tools. The companion
-/// Hermes cannot use it and says so in the snapshot (`AgentSessionSnapshot.toolServers`).
+/// passes it to Codex (`-c mcp_servers.<name>.…`), Claude Code (`--mcp-config`) and runtime
+/// plugins that take tool servers; Hermes cannot use it and says so in the snapshot
+/// (`AgentSessionSnapshot.toolServers`).
 public struct BrainToolServer: Codable, Equatable, Sendable {
     /// Letters, digits, `_` and `-`, at most 64; the agent sees its tools as
     /// `mcp__<name>__<tool>` (Claude) or under this server name (Codex).
