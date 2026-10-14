@@ -239,8 +239,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `HUDTextFeed` (see `docs/CONTRACT.md` § Text feed).
 
 **BrainKit** (its own package in this repo: `.package(path: "../hudkit/Kits/BrainKit")`)
-  behind a Node.js companion (Node 22 or later, no npm packages) that ships inside BrainKit with
-  its tests.
+- A local agent brain for any app: Codex, Claude Code or Hermes behind a Node.js companion
+  (Node 22 or later, no npm packages) that ships inside BrainKit with its tests.
 - `BrainService` finds Node.js, launches and supervises the companion from a plain
   `BrainServiceConfiguration` (runtime, workspace, state directory, port, tool paths, assistant
   name), restarts it with backoff, stops it with the app, and hands out `AgentSessionClient`s.
@@ -252,8 +252,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `BrainCatalog`.
 - The companion's `--assistant-name` names the assistant in its voice instructions; without it
   the instructions name none. Its environment variables use the `BRAINKIT_` prefix.
-  snapshots name the session (`sessionKey`).
+- BrainKit: snapshots name the external session a runtime drives, if any (`sessionKey`).
 - BrainKit: a host can give its brain tools (`toolServers`, stdio MCP servers) and a description
+  of its world (`hostContext`); Codex and Claude Code use them, Hermes reports it cannot.
 
 **Build**
 - `hud-build.sh` builds the executable products named in `HUD_HELPERS` and ships each in
