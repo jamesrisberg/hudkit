@@ -23,6 +23,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   override).
 
 ### Changed
+- `hud-icon.sh` takes an app's icon from the app repo's own `Icons/<repo>.svg` when it has one,
+  before `Icons/<repo>.svg` in HUDKit and the template placeholder.
 - `AgentRuntime` is a struct holding a runtime id rather than an enum: `.codex`, `.hermes` and
   `.claude` work as before and a plugin's id is a runtime too. A `switch` over it needs a
   `default`, and `AgentRuntime.allCases` is now `AgentRuntime.builtIns`.

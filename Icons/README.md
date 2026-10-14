@@ -37,7 +37,9 @@ Wormhole and Archibald keep their own icons.
 scripts/hud-icon.sh <repo> <app-repo-dir> [--preview check.png]
 ```
 
-renders with `rsvg-convert` (librsvg) and ImageMagick, then `iconutil`:
+renders with `rsvg-convert` (librsvg) and ImageMagick, then `iconutil`. The source is the app
+repo's own `Icons/<repo>.svg` when it has one (an app that keeps its icon in its own repo, on
+this same system), otherwise `Icons/<repo>.svg` here, otherwise `template.svg` with a warning:
 
 - `Sources/<Product>/Resources/AppIcon.icns`: 16, 32, 128, 256 and 512 pt at @1x and @2x
   (16 to 1024 px). Each size is rendered at 1024 and downsampled. At 16 px the glyph stroke is

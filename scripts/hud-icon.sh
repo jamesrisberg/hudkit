@@ -1,8 +1,9 @@
 #!/bin/zsh
 # hud-icon.sh <repo> [target-repo-dir] [--preview <file.png>]
 #
-# Renders a MacHUD family icon (hudkit/Icons/<repo>.svg, or Icons/template.svg with a warning
-# when the repo has none yet) into the app repo's bundle resources, see Icons/README.md:
+# Renders a MacHUD family icon into the app repo's bundle resources, see Icons/README.md. The
+# source is the first of <target-repo-dir>/Icons/<repo>.svg (an icon kept in the app's own repo),
+# hudkit/Icons/<repo>.svg, and hudkit/Icons/template.svg with a warning when neither exists:
 #   Sources/<Product>/Resources/AppIcon.icns          16-512 pt, @1x and @2x (16-1024 px)
 #   Sources/<Product>/Resources/MenuBarIcon.png       18x18 template glyph, black on clear
 #   Sources/<Product>/Resources/MenuBarIcon@2x.png    36x36
@@ -26,16 +27,17 @@ while (( $# )); do
   esac
 done
 HUDKIT="${0:A:h:h}"
-SVG="$HUDKIT/Icons/$REPO.svg"
+TARGET="${TARGET:A}"
+SVG="$TARGET/Icons/$REPO.svg"
+[[ -f "$SVG" ]] || SVG="$HUDKIT/Icons/$REPO.svg"
 if [[ ! -f "$SVG" ]]; then
-  print -u2 "hud-icon: no Icons/$REPO.svg; using the placeholder Icons/template.svg"
+  print -u2 "hud-icon: no Icons/$REPO.svg in $TARGET or in hudkit; using the placeholder Icons/template.svg"
   SVG="$HUDKIT/Icons/template.svg"
 fi
 for tool in rsvg-convert magick iconutil; do
   command -v $tool >/dev/null || { print -u2 "hud-icon: $tool not found"; exit 1; }
 done
 
-TARGET="${TARGET:A}"
 PLISTS=("$TARGET"/Sources/*/Resources/Info.plist(N))
 (( ${#PLISTS} == 1 )) || { print -u2 "hud-icon: expected one Sources/<Product>/Resources/Info.plist in $TARGET"; exit 1; }
 RES="${PLISTS[1]:h}"
