@@ -7,6 +7,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-13
+
 ### Added
 - BrainKit runtime plugins: an agent runtime installed apart from BrainKit, offered beside Codex,
   Claude Code and Hermes. A plugin is a folder
