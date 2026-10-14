@@ -10,17 +10,25 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 ### Added
 - BrainKit runtime plugins: an agent runtime installed apart from BrainKit, offered beside Codex,
   Claude Code and Hermes. A plugin is a folder
-  `~/Library/Application Support/BrainKit/Runtimes/<id>/` (or under `BRAINKIT_RUNTIMES_DIR`)
-  with a `runtime.json` (id, title, version, adapter, the executable to find and where, optional
-  install and login commands, required tools, a note, summary and docs link) and an adapter
-  module whose factory receives a small kit of companion helpers. A plugin is used only when its
-  folder and files belong to the user, nobody else can write them, none is a symbolic link and
-  the adapter stays inside the folder; otherwise it is listed with the reason. `BrainService`
-  reports plugins in `detections` (title, executable, commands, note, missing tools, refusal,
-  `isAvailable`, `unavailableReason`) and passes each available one to the companion
-  (`--runtime-plugin`, `--runtime-executable`). New `RuntimePlugin`, `BrainCatalog.detectAll`,
-  `ExecutableLocator.runtimesDirectory` and `BrainSettings.plugins` (each plugin's executable
-  override).
+  `~/Library/Application Support/BrainKit/Runtimes/<id>/` (or under `BRAINKIT_RUNTIMES_DIR`,
+  which may start with `~/` and must be absolute) with a `runtime.json` (id, title, version,
+  adapter, the executable to find and where, optional install and login commands, required
+  tools, a note, summary and docs link) and an `.mjs` adapter module whose factory receives a
+  small kit of companion helpers. A plugin is used only when the `Runtimes` folder, the
+  plugin's folder and everything in it belong to the user, nobody else can write them and none
+  is a symbolic link; otherwise it is listed with the reason. Any program running as the user
+  can install one, and it runs with the host app's permissions.
+- `BrainService` reports plugins in `detections`, passes each available one to the companion
+  (`--runtime-plugin`, `--runtime-executable`) and restarts the companion when a plugin's
+  version or adapter changes. `BrainService.runtimePluginsProblem` says why no plugin is read.
+- New API: `RuntimePlugin`; `BrainCatalog.detect(plugin:locator:override:)` and
+  `BrainCatalog.detectAll(locator:overrides:readFile:)`; `ExecutableLocator.runtimesDirectory`,
+  `runtimesDirectoryProblem`, `runtimePlugins()`, `defaultRuntimesDirectory(home:environment:)`,
+  `expandingHome(_:)` and `locate(_:override:additionalDirectories:)`; `AgentRuntime.builtIns`,
+  `isBuiltIn` and `isValidID(_:)`; `BrainCatalog.Detection` fields `title`, `installCommand`,
+  `loginCommand`, `loginTitle`, `note`, `summary`, `docsURL`, `missingRequirements`, `refusal`,
+  `plugin`, `isAvailable` and `unavailableReason`; `BrainSettings.plugins` (each plugin's
+  executable override, `BrainSettings.PluginOptions`).
 
 ### Changed
 - `hud-icon.sh` takes an app's icon from the app repo's own `Icons/<repo>.svg` when it has one,
@@ -30,13 +38,18 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   `default`, and `AgentRuntime.allCases` is now `AgentRuntime.builtIns`.
   `AgentRuntime(rawValue:)` accepts any valid id, so `BrainSettings` keeps a chosen plugin that is
   not installed (the service says why it cannot run) and only an invalid id decodes to Codex.
-  `BrainCatalog.entry(for:)` returns nil for a plugin. `BrainCatalog.Detection` carries the
-  runtime's title, commands and availability.
+- `BrainCatalog.entry(for:)` returns an optional (nil for a plugin).
+- `BrainServiceConfiguration.init` takes `pluginExecutablePaths:` in place of the removed
+  runtime's path label.
+- A runtime's saved state can no longer overwrite the companion state file's own keys
+  (permissions, request IDs, the receipt, conversations).
 
 ### Removed
-- BrainKit's fourth built-in runtime, with its `BrainSettings` key, its options type,
+- BrainKit's fourth built-in runtime, with its `BrainSettings` key and options type,
   `BrainServiceConfiguration`'s path for it and the companion's flag; such a runtime is now a
-  plugin. Its saved settings are not carried over.
+  plugin. Its saved options are not carried over. A saved choice of it stays selected, as the id
+  of a plugin that is not installed: the brain reports "<id> is not installed." until the user
+  installs the plugin or picks another runtime.
 
 ## [0.4.0] - 2026-10-13
 

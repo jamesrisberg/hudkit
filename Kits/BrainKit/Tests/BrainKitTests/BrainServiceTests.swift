@@ -39,7 +39,7 @@ final class BrainServiceTests: XCTestCase {
             locator: { [unowned self] in
                 ExecutableLocator(path: "/usr/bin:/bin", home: "/Users/test",
                                   isExecutable: { [files] in files.contains($0) }, contentsOfDirectory: { _ in [] },
-                                  runtimesDirectory: runtimes.path)
+                                  runtimesDirectory: runtimes.relativePath)
             },
             nodeVersion: { [unowned self] node in
                 versionCalls.append(node)
@@ -133,6 +133,37 @@ final class BrainServiceTests: XCTestCase {
         let third = make()
         third.configure(configuration(.codex))
         XCTAssertTrue(try XCTUnwrap(launcher.specs.last?.arguments).contains("--runtime-plugin"))
+    }
+
+    func testAPluginUpgradeRestartsTheCompanion() throws {
+        try writePlugin("example-agent", in: runtimes)
+        files.insert("/Users/test/.local/bin/example-agent")
+        let service = make()
+        service.configure(configuration(example))
+        try writeToken(String(repeating: "f", count: 64), to: root.appendingPathComponent("state/token"))
+        launcher.last.say("Brain companion ready at")
+        // Nothing changed: the same configuration keeps the process.
+        service.configure(configuration(example))
+        scheduler.advance(0.4)
+        XCTAssertEqual(launcher.launched.count, 1)
+        // A new version of the plugin (same folder, same executable) restarts it.
+        try writePlugin("example-agent", in: runtimes, manifest: ["version": "2.0.0"])
+        service.refreshDetections()
+        service.configure(configuration(example))
+        scheduler.advance(0.4)
+        XCTAssertTrue(launcher.launched[0].terminated)
+        launcher.launched[0].exit(0)
+        XCTAssertEqual(launcher.launched.count, 2)
+        XCTAssertEqual(service.detections[example]?.plugin?.version, "2.0.0")
+    }
+
+    func testARelativePluginsFolderIsReportedAndReadsNoPlugins() throws {
+        runtimes = URL(fileURLWithPath: "relative/Runtimes")
+        let service = make()
+        service.configure(configuration(.codex))
+        XCTAssertEqual(service.runtimePluginsProblem,
+                       "The runtime plugins folder relative/Runtimes (BRAINKIT_RUNTIMES_DIR) is not an absolute path.")
+        XCTAssertFalse(try XCTUnwrap(launcher.specs.last?.arguments).contains("--runtime-plugin"))
     }
 
     func testAPluginThatIsRefusedOrMissingIsNotPassedAndCannotBeChosen() throws {

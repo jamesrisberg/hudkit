@@ -107,9 +107,13 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
 - **Runtime plugins.** A plugin is a folder `~/Library/Application Support/BrainKit/Runtimes/<id>/`
   (`BRAINKIT_RUNTIMES_DIR` names another parent folder; `ExecutableLocator.runtimesDirectory`)
   with a `runtime.json` and an adapter module; the companion README's "Runtime plugins" has the
-  contract and the trust rule. `BrainService` passes every available plugin to the companion
+  contract and the trust rule, which covers the `Runtimes` folder, the plugin's folder and
+  everything in it. `BrainService` passes every available plugin to the companion
   (`--runtime-plugin`, `--runtime-executable`), so switching to one needs no restart; a plugin
-  that is refused, missing its executable or missing a tool it `requires` is not passed.
+  that is refused, missing its executable or missing a tool it `requires` is not passed. A new
+  plugin `version` or adapter file restarts the companion at the next detection (a
+  configuration change or `refreshDetections()`). `BRAINKIT_RUNTIMES_DIR` may start with `~/`;
+  a relative value reads no plugins and `runtimePluginsProblem` says why.
 - **External sessions.** A runtime that drives a session another app also shows reports it in
   `AgentSessionSnapshot.sessionKey`, in the runtime's own form, so a host can ask that app to
   open it. Turns started there appear in the snapshots without a `requestId`.

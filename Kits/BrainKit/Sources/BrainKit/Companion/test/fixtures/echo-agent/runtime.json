@@ -9,6 +9,7 @@
   "installCommand": "echo install echo-agent",
   "loginCommand": "echo-agent login",
   "loginTitle": "Sign In",
+  "requires": ["git"],
   "note": "Answers every turn with its own text.",
   "summary": "A runtime plugin for the tests.",
   "docsURL": "https://example.com/echo-agent",

@@ -38,11 +38,21 @@ public struct ExecutableLocator {
             runtimesDirectory: defaultRuntimesDirectory(home: home, environment: environment))
     }
 
-    /// `BRAINKIT_RUNTIMES_DIR` when set (tests and isolated runs), otherwise
-    /// `<home>/Library/Application Support/BrainKit/Runtimes`.
+    /// `BRAINKIT_RUNTIMES_DIR` when set (tests and isolated runs; `~/` expanded, an absolute
+    /// path normalized), otherwise `<home>/Library/Application Support/BrainKit/Runtimes`. A
+    /// relative value is returned as given, and `runtimesDirectoryProblem` reports it.
     public static func defaultRuntimesDirectory(home: String, environment: [String: String]) -> String {
-        if let directory = environment["BRAINKIT_RUNTIMES_DIR"], !directory.isEmpty { return directory }
-        return "\(home)/Library/Application Support/BrainKit/Runtimes"
+        guard let value = environment["BRAINKIT_RUNTIMES_DIR"], !value.isEmpty else {
+            return "\(home)/Library/Application Support/BrainKit/Runtimes"
+        }
+        let expanded = value.hasPrefix("~/") ? home + value.dropFirst() : value
+        return expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded).standardized.path : expanded
+    }
+
+    /// Why no plugin is read from `runtimesDirectory`, or nil: it must be an absolute path.
+    public var runtimesDirectoryProblem: String? {
+        runtimesDirectory.hasPrefix("/") ? nil
+            : "The runtime plugins folder \(runtimesDirectory) (BRAINKIT_RUNTIMES_DIR) is not an absolute path."
     }
 
     /// Install folders used by Homebrew, the official installers and common version managers.
@@ -218,7 +228,8 @@ public enum BrainCatalog {
         }
         return Detection(
             runtime: runtime, title: runtime.displayName, executable: executable, apiServerEnabled: apiServer,
-            installCommand: entry.installCommand, loginCommand: entry.loginCommand, loginTitle: entry.loginTitle,
+            installCommand: entry.installCommand, loginCommand: entry.loginCommand,
+            loginTitle: entry.loginCommand == nil ? nil : entry.loginTitle,
             note: nil, summary: entry.summary, docsURL: entry.docsURL, missingRequirements: [], refusal: nil, plugin: nil)
     }
 
@@ -237,12 +248,15 @@ public enum BrainCatalog {
                 executable = locator.locate(plugin.executable, override: override,
                                             additionalDirectories: plugin.searchPaths)
             }
-            missing = plugin.requires.filter { locator.locate($0) == nil }
+            missing = plugin.requires.filter { tool in
+                let isPath = tool.hasPrefix("/") || tool.hasPrefix("~/")
+                return locator.locate(tool, override: isPath ? tool : "") == nil
+            }
         }
         return Detection(
             runtime: plugin.runtime, title: plugin.title, executable: executable, apiServerEnabled: nil,
             installCommand: plugin.installCommand, loginCommand: plugin.loginCommand,
-            loginTitle: plugin.isTrusted ? plugin.loginTitle ?? "Log In" : nil, note: plugin.note,
+            loginTitle: plugin.loginCommand == nil ? nil : plugin.loginTitle ?? "Log In", note: plugin.note,
             summary: plugin.summary, docsURL: plugin.docsURL,
             missingRequirements: missing, refusal: plugin.refusal, plugin: plugin)
     }

@@ -276,6 +276,7 @@ The folder holds `runtime.json`:
   "installCommand": "brew install example-agent",
   "loginCommand": "example-agent login",
   "loginTitle": "Log In",
+  "requires": ["git"],
   "note": "One line a host may show beside the runtime.",
   "summary": "A sentence describing the runtime.",
   "docsURL": "https://example.com/example-agent"
@@ -288,24 +289,32 @@ The folder holds `runtime.json`:
 | `id` | `^[a-z][a-z0-9-]{0,31}$`, the folder's name, and not a built-in id (`codex`, `hermes`, `claude`) |
 | `title` | the name a host shows |
 | `version` | the plugin's version (semver) |
-| `adapter` | the adapter module, relative to the folder |
+| `adapter` | the adapter module, an `.mjs` file inside the folder, relative to it |
 | `executable` | the tool to find: a name looked up like the built-ins' tools (PATH, the common install folders, then `searchPaths`), or an absolute or `~/` path |
 | `searchPaths` | optional extra folders to look in (`~/` allowed) |
 | `installCommand`, `loginCommand`, `loginTitle` | optional shell commands (and the login button's title) a host may offer |
-| `requires` | optional other tools the runtime needs, looked up like the built-ins' tools; the plugin is unavailable while one is missing, and the reason names it |
+| `requires` | optional other tools the runtime needs: names looked up like the built-ins' tools, or absolute or `~/` paths; the plugin is unavailable while one is missing, and the reason names it |
 | `note` | optional one line a host may show |
 | `summary`, `docsURL` | optional sentence describing the runtime, and an http(s) link to its documentation |
 
 Unknown keys are ignored.
 
-**Trust.** A plugin is refused unless its folder, its `runtime.json` and its adapter file are
-each, checked without following links, not a symbolic link, owned by the current (effective)
-user and writable by no one else (no group or world write bit), and the adapter's path stays
-inside the folder, also with links in between resolved. BrainKit checks this when it detects
-plugins; a refused plugin still appears in the detections, unavailable, with the reason. The
-companion checks again immediately before importing the adapter; a plugin refused then (or
-whose adapter fails to load) is still selectable, and starting it fails with the reason, like
-any runtime that cannot start.
+**Trust.** A plugin is refused unless the folder holding it (`Runtimes`), its own folder and
+every entry inside that folder, at any depth, are each, checked without following links, not a
+symbolic link, owned by the current (effective) user and writable by no one else (no group or
+world write bit); a folder of more than 4096 entries is refused too. The adapter's path must
+stay inside the folder and name an `.mjs` file. BrainKit checks this when it detects plugins; a
+refused plugin still appears in the detections, unavailable, with the reason (the Swift and
+Node checks run in the same order and give the same reasons). The companion checks the whole
+tree again immediately before importing the adapter; a plugin refused then, whose adapter fails
+to load, or whose import and factory take more than 10 seconds, is still selectable, and
+starting it fails with the reason, like any runtime that cannot start.
+
+What the rule does not cover: any process running as the user can install a plugin, and a
+plugin's adapter runs inside the companion, so it acts with the host app's privacy grants
+(Accessibility, Microphone, Full Disk Access, …) and the user's files. A plugin whose id is a
+saved runtime choice loads on the next start without being picked again. Install only plugins
+you would run as a program.
 
 **Adapter.** The adapter default-exports a factory:
 
@@ -330,8 +339,13 @@ export default function create(kit, { executable, toolServers, options }) {
   receive them; `options` is reserved and `{}`.
 - The factory returns an instance of a `kit.Runtime` subclass whose `id` is the plugin's id;
   the session keys the saved conversation and the snapshot by that id. The factory may be
-  async. The companion imports the adapter when the runtime is chosen, and again
-  after the file changes.
+  async. A runtime returned with another id, or that is not a `kit.Runtime`, is closed and the
+  plugin reported unavailable.
+- `persistentState()` shares the state file's top level; its keys `permissions`, `requestIds`,
+  `receipt`, `runtime`, `conversations`, `cwd` and `threadId` are ignored.
+- The companion imports the adapter once, when the runtime is first chosen. `BrainService`
+  restarts the companion when a plugin's `version` or its adapter file's modification time
+  changes (at its next detection: a configuration change or `refreshDetections()`).
 
 `test/fixtures/echo-agent/` is a complete minimal plugin, exercised by `test/plugins.test.mjs`.
 
@@ -408,7 +422,9 @@ capabilities, dropped stream, restart), the Claude adapter against a fake `claud
 that launches the real MCP permission bridge (streaming, resume, approvals, SIGINT
 cancel, crash, permission modes, socket authentication), tool servers and host context
 (validation, the exact Codex `-c` and Claude `--mcp-config`/`--allowedTools` arguments, Codex
-MCP tool-call approvals, private host files, the Hermes note), runtime switching, runtime plugins (`runtime.json`, the trust refusals,
+MCP tool-call approvals, private host files, the Hermes note), runtime switching, what a runtime
+driving an external session relies on (turns and approvals from another client, state persisted
+before `start` returns, reserved state keys), runtime plugins (`runtime.json`, the trust refusals,
 the kit, and the fixture plugin through a session and a spawned companion), HTTP
 auth/Host/Origin checks, body limits, file permissions, and snapshot byte
 compatibility. The smoke test initializes the installed Codex protocol and reads

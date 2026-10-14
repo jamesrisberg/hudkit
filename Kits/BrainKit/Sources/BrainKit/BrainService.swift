@@ -104,6 +104,8 @@ public final class BrainService: ObservableObject {
     /// Last detection of each brain for the current configuration: the built-in runtimes and
     /// every runtime plugin found (`BrainCatalog.detectAll`).
     @Published public private(set) var detections: [AgentRuntime: BrainCatalog.Detection] = [:]
+    /// Why no runtime plugin is read (`ExecutableLocator.runtimesDirectoryProblem`), or nil.
+    @Published public private(set) var runtimePluginsProblem: String?
     /// The configuration last asked for; it may still be waiting out the debounce.
     public private(set) var configuration: BrainServiceConfiguration?
     /// The configuration the process runs with.
@@ -294,7 +296,9 @@ public final class BrainService: ObservableObject {
         for (id, path) in configuration?.pluginExecutablePaths ?? [:] {
             if let runtime = AgentRuntime(rawValue: id), !runtime.isBuiltIn { overrides[runtime] = path }
         }
-        let found = BrainCatalog.detectAll(locator: locatorProvider(), overrides: overrides)
+        let locator = locatorProvider()
+        runtimePluginsProblem = locator.runtimesDirectoryProblem
+        let found = BrainCatalog.detectAll(locator: locator, overrides: overrides)
         detections = Dictionary(found.map { ($0.runtime, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
@@ -417,8 +421,12 @@ public final class BrainService: ObservableObject {
         if !name.isEmpty { arguments += ["--assistant-name", name] }
         if !toolServersJSON.isEmpty { arguments += ["--tool-servers", toolServersFile.path] }
         if !hostContext.isEmpty { arguments += ["--host-context", hostContextFile.path] }
-        // The files' contents are part of the key: the companion reads them only at start.
-        let key = [node] + arguments + [toolServersJSON, hostContext]
+        // The files' contents are part of the key: the companion reads them only at start. So is
+        // each plugin's version and adapter: the companion imports an adapter once.
+        let pluginVersions = plugins.map {
+            "\($0.runtime.rawValue)@\($0.plugin?.version ?? "")@\($0.plugin?.adapterModified?.timeIntervalSince1970 ?? 0)"
+        }
+        let key = [node] + arguments + [toolServersJSON, hostContext] + pluginVersions
         arguments += ["--runtime", configuration.runtime.rawValue]
         let toolDirectories = detections.values.filter { $0.plugin == nil || $0.isAvailable }.compactMap { $0.executable }
             .map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }

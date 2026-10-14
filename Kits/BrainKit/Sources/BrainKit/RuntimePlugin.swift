@@ -32,6 +32,9 @@ public struct RuntimePlugin: Equatable, Sendable {
     public let docsURL: URL?
     /// Why the plugin cannot be used; nil when it is trusted and its `runtime.json` is valid.
     public let refusal: String?
+    /// When the adapter file last changed; with `version`, what makes `BrainService` restart
+    /// the companion after an upgrade.
+    public let adapterModified: Date?
 
     public var id: String { runtime.rawValue }
     public var isTrusted: Bool { refusal == nil }
@@ -53,9 +56,10 @@ public struct RuntimePlugin: Equatable, Sendable {
         summary = nil
         docsURL = nil
         refusal = reason
+        adapterModified = nil
     }
 
-    init(runtime: AgentRuntime, directory: String, manifest: Manifest) {
+    init(runtime: AgentRuntime, directory: String, manifest: Manifest, adapterModified: Date) {
         self.runtime = runtime
         self.directory = directory
         title = manifest.title
@@ -71,18 +75,22 @@ public struct RuntimePlugin: Equatable, Sendable {
         summary = manifest.summary
         docsURL = manifest.docsURL
         refusal = nil
+        self.adapterModified = adapterModified
     }
 
     /// Reads the plugin in `folder`, named `id`: the same checks, in the same order and with
     /// the same reasons, as the companion makes before importing the adapter (`plugins.mjs`).
+    /// Nil when `id` is not a runtime id.
     public static func read(_ id: String, in folder: String) -> RuntimePlugin? {
         guard let runtime = AgentRuntime(rawValue: id) else { return nil }
+        let normalized = folder.hasPrefix("/") ? URL(fileURLWithPath: folder).standardized.path : folder
         do {
-            return RuntimePlugin(runtime: runtime, directory: folder, manifest: try inspect(runtime, folder: folder))
+            let (manifest, modified) = try inspect(runtime, folder: normalized)
+            return RuntimePlugin(runtime: runtime, directory: normalized, manifest: manifest, adapterModified: modified)
         } catch let refusal as Refusal {
-            return RuntimePlugin(refused: runtime, directory: folder, reason: refusal.reason)
+            return RuntimePlugin(refused: runtime, directory: normalized, reason: refusal.reason)
         } catch {
-            return RuntimePlugin(refused: runtime, directory: folder, reason: error.localizedDescription)
+            return RuntimePlugin(refused: runtime, directory: normalized, reason: error.localizedDescription)
         }
     }
 
@@ -97,49 +105,84 @@ public struct RuntimePlugin: Equatable, Sendable {
         var docsURL: URL?
     }
 
-    private static func inspect(_ runtime: AgentRuntime, folder directory: String) throws -> Manifest {
+    /// At most this many entries in a plugin folder; a larger tree is refused rather than walked.
+    public static let maximumEntries = 4096
+
+    private static func inspect(_ runtime: AgentRuntime, folder: String) throws -> (Manifest, Date) {
         let id = runtime.rawValue
         if runtime.isBuiltIn { throw Refusal(reason: "\(id) is a built-in runtime") }
-        let folder = URL(fileURLWithPath: directory).standardized.path
-        try trusted(folder, "The plugin folder \(directory)", directory: true)
+        guard folder.hasPrefix("/") else { throw Refusal(reason: "The plugin folder \(folder.prefix(256)) is not an absolute path") }
+        let name = (folder as NSString).lastPathComponent
+        guard name == id else { throw Refusal(reason: "The plugin folder \"\(name.prefix(64))\" is not named \"\(id)\"") }
+        let parent = (folder as NSString).deletingLastPathComponent
+        _ = try trusted(parent, "The runtimes folder \(parent)", .directory)
+        _ = try trusted(folder, "The plugin folder \(folder)", .directory)
         let descriptor = folder + "/runtime.json"
-        try trusted(descriptor, "runtime.json", directory: false)
-        guard let data = FileManager.default.contents(atPath: descriptor),
-              let object = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed)
-        else { throw Refusal(reason: "runtime.json is not valid JSON") }
+        _ = try trusted(descriptor, "runtime.json", .file)
+        guard let data = FileManager.default.contents(atPath: descriptor) else {
+            throw Refusal(reason: "runtime.json cannot be read")
+        }
+        guard let object = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) else {
+            throw Refusal(reason: "runtime.json is not valid JSON")
+        }
         let manifest = try readManifest(object, id: id)
         let label = "The adapter \"\(manifest.adapter.prefix(128))\""
         let adapter = URL(fileURLWithPath: folder + "/" + manifest.adapter).standardized.path
         guard !manifest.adapter.hasPrefix("/"), adapter.hasPrefix(folder + "/") else {
             throw Refusal(reason: "\(label) is outside the plugin folder")
         }
-        try trusted(adapter, label, directory: false)
-        // A link in a folder between the plugin folder and the adapter.
-        guard let real = resolved(adapter), let realFolder = resolved(folder), real.hasPrefix(realFolder + "/") else {
-            throw Refusal(reason: "\(label) is outside the plugin folder")
-        }
-        return manifest
+        guard adapter.hasSuffix(".mjs") else { throw Refusal(reason: "\(label) is not an .mjs module") }
+        let info = try trusted(adapter, label, .file)
+        try trustedTree(folder)
+        let modified = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+            + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+        return (manifest, modified)
     }
 
-    /// The path with every link resolved, or nil when it does not exist.
-    private static func resolved(_ path: String) -> String? {
-        guard let pointer = realpath(path, nil) else { return nil }
-        defer { free(pointer) }
-        return String(cString: pointer)
-    }
+    private enum Kind { case directory, file, entry }
 
-    /// The trust rule, checked without following links: not a symbolic link, owned by this
-    /// user (the effective user id) and writable by no one else.
-    private static func trusted(_ path: String, _ label: String, directory: Bool) throws {
+    /// The trust rule for one entry, checked without following links: not a symbolic link,
+    /// owned by this user (the effective user id) and writable by no one else.
+    private static func trusted(_ path: String, _ label: String, _ kind: Kind) throws -> stat {
         var info = stat()
-        guard lstat(path, &info) == 0 else { throw Refusal(reason: "\(label) is missing") }
+        guard lstat(path, &info) == 0 else {
+            throw Refusal(reason: errno == ENOENT ? "\(label) is missing" : "\(label) cannot be read")
+        }
         let type = info.st_mode & S_IFMT
         if type == S_IFLNK { throw Refusal(reason: "\(label) is a symbolic link") }
-        guard directory ? type == S_IFDIR : type == S_IFREG else {
-            throw Refusal(reason: "\(label) is not a \(directory ? "folder" : "regular file")")
+        let fits: Bool
+        switch kind {
+        case .directory: fits = type == S_IFDIR
+        case .file: fits = type == S_IFREG
+        case .entry: fits = type == S_IFDIR || type == S_IFREG
+        }
+        guard fits else {
+            let wanted = kind == .directory ? "folder" : kind == .file ? "regular file" : "regular file or folder"
+            throw Refusal(reason: "\(label) is not a \(wanted)")
         }
         guard info.st_uid == geteuid() else { throw Refusal(reason: "\(label) is not owned by you") }
         guard info.st_mode & 0o022 == 0 else { throw Refusal(reason: "\(label) is writable by other users") }
+        return info
+    }
+
+    /// Every entry under the plugin folder, depth first in name order, checked against the
+    /// trust rule: a plugin's adapter may import any file beside it.
+    private static func trustedTree(_ folder: String) throws {
+        var count = 0
+        func walk(_ relative: String) throws {
+            let path = relative.isEmpty ? folder : folder + "/" + relative
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: path) else {
+                throw Refusal(reason: "\"\(relative)\" in the plugin folder cannot be read")
+            }
+            for name in names.sorted(by: { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }) {
+                count += 1
+                if count > maximumEntries { throw Refusal(reason: "The plugin folder has more than \(maximumEntries) entries") }
+                let entry = relative.isEmpty ? name : relative + "/" + name
+                let info = try trusted(folder + "/" + entry, "\"\(entry.prefix(256))\" in the plugin folder", .entry)
+                if info.st_mode & S_IFMT == S_IFDIR { try walk(entry) }
+            }
+        }
+        try walk("")
     }
 
     private static func readManifest(_ object: Any, id: String) throws -> Manifest {
@@ -201,7 +244,9 @@ public struct RuntimePlugin: Equatable, Sendable {
 extension ExecutableLocator {
     /// The plugins in `runtimesDirectory`, by id: every folder whose name is a runtime id
     /// (hidden entries, files and other names are skipped), refused ones included.
+    /// None when `runtimesDirectory` is not absolute (`runtimesDirectoryProblem` says why).
     public func runtimePlugins() -> [RuntimePlugin] {
+        guard runtimesDirectoryProblem == nil else { return [] }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: runtimesDirectory)) ?? []
         return names.sorted().compactMap { name in
             let folder = "\(runtimesDirectory)/\(name)"
