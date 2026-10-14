@@ -261,7 +261,7 @@ export class Session {
     if (name === this.runtime.id && this.ready) return this.snapshot();
     this.busy = true;
     try {
-      const next = this.createRuntime(name);
+      const next = await this.createRuntime(name);
       const previous = this.runtime; const restart = previous.id === next.id;
       if (this.state.threadId) this.conversations[previous.id] = { ...(this.started ? previous.persistentState() : this.runtimeSaved), threadId: this.state.threadId };
       this.unbind(); previous.close();
