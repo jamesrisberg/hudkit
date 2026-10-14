@@ -1,7 +1,7 @@
 # HUDKit
 
 The shared contract, visual language and build tooling for MacHUD-aware macOS apps (Sift, Stash,
-Scratch, ffmpegHUD, magickHUD, serversHUD and MacHUD itself).
+Scratch, ffmpegHUD, magickHUD, serversHUD, widgetHUD, UsageHUD and MacHUD itself).
 macOS 14+, Swift 5.9+.
 
 ## What it is

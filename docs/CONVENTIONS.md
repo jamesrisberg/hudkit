@@ -1,8 +1,8 @@
 # MacHUD app repo conventions
 
-How every app in the MacHUD family (Sift, Stash, Scratch, ffmpegHUD, magickHUD,
-serversHUD, and the next one) lays out its repo, builds, versions and documents itself. The
-rules come from what the apps already do; where they differed, the most common or most useful
+How every app in the MacHUD family (Sift, Stash, Scratch, ffmpegHUD, magickHUD, serversHUD,
+widgetHUD, UsageHUD, and the next one) lays out its repo, builds, versions and documents itself.
+The rules come from what the apps already do; where they differed, the most common or most useful
 variant won. `Templates/App` is the executable form of this document: `scripts/hud-new-app.sh`
 turns it into a new repo that follows every rule below. What the app serves over its socket is
 specified in [CONTRACT.md](CONTRACT.md); how to build one out, step by step, is
@@ -304,11 +304,11 @@ family; nothing else is involved in updating.
               "homepage": "https://github.com/jamesrisberg/stash", "bundled": true } ] }
 ```
 
-`kind` is `umbrella` (MacHUD), `hover` or `windowed` (the manifest's first panel). `bundled`
-marks the tools MacHUD offers to install by default: every hover app; the windowed apps (Sift,
-Wormhole) are optional. `hud-catalog.sh set` fills
-what it is not given from the existing entry, then from the app repo (Info.plist, `machud.json`,
-the GitHub description); it edits a temporary worktree of machud at `origin/main`, commits
+`kind` is `umbrella` (MacHUD), `hover` or `windowed` (the manifest's first panel), or `widget` (an
+app with widgets only). `bundled` marks the tools MacHUD offers to install by default: every hover
+app; the windowed apps (Sift, Wormhole) are optional. `hud-catalog.sh set` fills what it is not
+given from the existing entry, then from the app repo (Info.plist, `machud.json`, the GitHub
+description); it edits a temporary worktree of machud at `origin/main`, commits
 `Catalog: <Name> <version>` and pushes, so a machud checkout with work in progress is untouched.
 `hud-catalog.sh hudkit <v>` sets the HUDKit version; `show` prints the published file.
 
@@ -345,7 +345,7 @@ through all of it with a worked example and the verification sequence.
 
 ## Where the current apps differ
 
-All six apps have `Sources/<Product>/Resources`, the build/install shims, `VERSION`,
+All eight apps have `Sources/<Product>/Resources`, the build/install shims, `VERSION`,
 `CHANGELOG.md`, `ci.yml` and a `<Product>Tests` target. What differs from the rules above:
 
 | App | Difference |
@@ -353,7 +353,8 @@ All six apps have `Sources/<Product>/Resources`, the build/install shims, `VERSI
 | sift | Kit is `FileKit` (Stash depends on it by that name); settings live in UserDefaults and `<home>/rules.json`, not `preferences.json`; reads `SIFT_TARGETS_FILE` and `SIFT_DOCKS_FILE` too |
 | stash | `STASH_SOCKET` also takes an absolute path |
 | scratch, sift, stash, ffmpeghud, magickhud, servershud | `--snapshot` keeps the app running after writing the PNG (Stash quits with `--snapshot-quit`); quit it with `<repo> quit` |
-| all but the template | the CLI ignores a leading `ctl` and has `watch` |
+| widgethud, usagehud | `--snapshot` writes its PNG and quits |
+| all but the template, widgethud and usagehud | the CLI ignores a leading `ctl` and has `watch` |
 
 MacHUD itself (`machud`) is the umbrella app, not a panel app: it keeps its own bundle id
 (`com.jrisberg.machud`), control socket (`/tmp/machud-<uid>.sock`, plus the contract socket
