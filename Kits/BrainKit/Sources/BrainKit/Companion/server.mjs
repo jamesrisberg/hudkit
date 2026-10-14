@@ -103,6 +103,15 @@ export function parseArguments(args) {
   if (options['--assistant-name'] !== undefined && !/^[^\n\r]{1,64}$/.test(options['--assistant-name'])) throw new Error('--assistant-name must be one line of at most 64 characters');
   return options;
 }
+/**
+ * The runtime to start with: `--runtime`, else the one saved in the state directory, else
+ * Codex. A saved plugin the command line does not pass (uninstalled, or refused by the host)
+ * falls back to Codex; its conversation stays saved and resumes when the plugin is back.
+ */
+export function startupRuntime(options, saved, plugins) {
+  if (options['--runtime'] !== undefined) return options['--runtime'];
+  return [...RUNTIME_IDS, ...Object.keys(plugins)].includes(saved.runtime) ? saved.runtime : 'codex';
+}
 const HOST_CONTEXT_LIMIT = 65536;
 /**
  * The host's tool servers and context. Both files name what the agent runs and is told, so
@@ -139,8 +148,7 @@ async function main() {
   const runtimeToken = options['--runtime-token-file'] ? (await privateRead(path.resolve(options['--runtime-token-file']))).trim() : options['--runtime-token'] ?? process.env.BRAINKIT_RUNTIME_TOKEN;
   // The explicit flag wins; otherwise the choice last made (flag or app) persists in the state directory.
   const plugins = pluginOptions(options, RUNTIME_IDS);
-  // A saved choice of a plugin the host no longer passes falls back to Codex.
-  const runtimeName = options['--runtime'] ?? ([...RUNTIME_IDS, ...Object.keys(plugins)].includes(saved.runtime) ? saved.runtime : 'codex');
+  const runtimeName = startupRuntime(options, saved, plugins);
   const { toolServers, hostContext } = await loadHostFiles(options);
   const runtimeOptions = { codex: options['--codex'], claude: options['--claude'], runtimeUrl: options['--runtime-url'], runtimeToken, toolServers, plugins };
   const build = name => createRuntime(name, runtimeOptions);
