@@ -49,8 +49,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 - BrainKit's fourth built-in runtime, with its `BrainSettings` key and options type,
   `BrainServiceConfiguration`'s path for it and the companion's flag; such a runtime is now a
   plugin. Its saved options are not carried over. A saved choice of it stays selected, as the id
-  of a plugin that is not installed: the brain reports "<id> is not installed." until the user
-  installs the plugin or picks another runtime.
+  of a plugin that is not installed: the brain reports "No runtime plugin <id> is installed."
+  until the user installs the plugin or picks another runtime.
 
 ## [0.4.0] - 2026-10-13
 

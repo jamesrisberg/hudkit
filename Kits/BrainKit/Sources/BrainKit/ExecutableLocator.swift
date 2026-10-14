@@ -198,7 +198,7 @@ public enum BrainCatalog {
 
         /// Why the runtime cannot be used, or nil when it can.
         public var unavailableReason: String? {
-            if let refusal { return refusal }
+            if let refusal { return refusal.hasSuffix(".") ? refusal : refusal + "." }
             guard executable != nil else { return "\(title) is not installed." }
             guard missingRequirements.isEmpty else {
                 return "\(title) needs \(missingRequirements.joined(separator: ", ")), which \(missingRequirements.count == 1 ? "is" : "are") not installed."
@@ -215,8 +215,10 @@ public enum BrainCatalog {
     ) -> Detection {
         guard let entry = entry(for: runtime) else {
             let folder = "\(locator.runtimesDirectory)/\(runtime.rawValue)"
-            let plugin = RuntimePlugin.read(runtime.rawValue, in: folder)
-                ?? RuntimePlugin(refused: runtime, directory: folder, reason: "No runtime plugin \(runtime.rawValue) is installed")
+            var info = stat()
+            let absent = lstat(folder, &info) != 0 && errno == ENOENT
+            let notInstalled = RuntimePlugin(refused: runtime, directory: folder, reason: "No runtime plugin \(runtime.rawValue) is installed")
+            let plugin = absent ? notInstalled : RuntimePlugin.read(runtime.rawValue, in: folder) ?? notInstalled
             return detect(plugin: plugin, locator: locator, override: override)
         }
         let executable = locator.locate(entry.executable, override: override)

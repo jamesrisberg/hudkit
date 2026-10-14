@@ -252,6 +252,16 @@ final class RuntimePluginTests: XCTestCase {
         XCTAssertFalse(BrainCatalog.detect(AgentRuntime(rawValue: "absent-agent")!, locator: self.locator()).isAvailable)
     }
 
+    func testAPluginWithNoFolderIsNotInstalledAndEveryReasonIsASentence() throws {
+        let absent = BrainCatalog.detect(AgentRuntime(rawValue: "absent-agent")!, locator: locator())
+        XCTAssertEqual(absent.unavailableReason, "No runtime plugin absent-agent is installed.")
+        try writePlugin("example-agent", in: runtimes, manifest: [:])
+        try FileManager.default.removeItem(at: runtimes.appendingPathComponent("example-agent/runtime.json"))
+        let broken = BrainCatalog.detect(AgentRuntime(rawValue: "example-agent")!, locator: locator())
+        XCTAssertEqual(broken.refusal, "runtime.json is missing")
+        XCTAssertEqual(broken.unavailableReason, "runtime.json is missing.")
+    }
+
     func testAPluginMayNameAnAbsoluteExecutable() throws {
         try writePlugin("example-agent", in: runtimes, manifest: ["executable": "~/tools/example"])
         let detection = BrainCatalog.detect(AgentRuntime(rawValue: "example-agent")!,

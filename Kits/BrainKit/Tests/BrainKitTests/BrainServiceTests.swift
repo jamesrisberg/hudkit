@@ -214,7 +214,7 @@ final class BrainServiceTests: XCTestCase {
         refused.configure(configuration(example))
         let detection = try XCTUnwrap(refused.detections[example])
         XCTAssertFalse(detection.isAvailable)
-        XCTAssertEqual(refused.service.state, .unavailable(try XCTUnwrap(detection.refusal)))
+        XCTAssertEqual(refused.service.state, .unavailable(try XCTUnwrap(detection.unavailableReason)))
         refused.configure(nil)
         refused.configure(configuration(.codex))
         XCTAssertFalse(try XCTUnwrap(launcher.specs.last?.arguments).contains("--runtime-plugin"))
