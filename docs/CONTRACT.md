@@ -512,6 +512,7 @@ The manifest's `kind` tells MacHUD how to present a panel; the app's window beha
 4. A click pins the panel open (MacHUD stops hiding it on leave); clicking again hides it.
    `machud summon` of a hover app opens it pinned, also with `reason=hover`.
 
+**Windowed panels** (`kind: windowed`: Sift, Wormhole):
 
 - A click on the button sends `panel frame` (the frame remembered at the last dismiss, if any)
   then `panel show from= anchor= reason=click`; if the panel is visible and frontmost, a click
@@ -795,11 +796,13 @@ placeholder.
 ## Agent sessions
 
 - Opt in per panel with `"capabilities": ["agent-sessions"]` (`HUDAgentSessions.capability`) to
+  offer agent sessions (a coding agent's running/idle sessions) that another
   app or the voice host can show and focus without naming this app.
 - The panel's app answers two things on its own socket, both app-specific (not part of the
   required verbs):
   - `action name=open-session id=<sessionKey>` (`HUDAgentSessions.openSessionAction`): show and
     focus that session (`performAction`, like any other `action`). `sessionKey` is opaque to
+    MacHUD, provider-defined (for example `claude:<sessionId>`).
   - `sessions` (`HUDAgentSessions.sessionsCommand`): a top-level command, registered like `state`,
     answering `{"ok": true, "sessions": [{"id", "title", "cwd", "state"}, ...]}` — the sessions
     the app currently shows. `state` is free-form (e.g. `idle`, `running`, `requires_action`).

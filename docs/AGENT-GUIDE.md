@@ -29,6 +29,7 @@ Settle these before writing code; ask the user when the request does not say.
 | Actions | the app's verbs, each `action <verb> k=v` over the socket and a CLI shorthand | `bump`, `reset` |
 | Settings | what the user can change in MacHUD's settings window | `defaultStep` |
 | File drops | does the dock button accept files? (`acceptsFileDrop`) | yes |
+| Hotkey | one unused global hotkey. Taken: ⌃⌥Space, ⌃⌥D, ⌃⌥B (MacHUD), ⌃⌥N and ⌃⌥⇧V (Scratch), ⌃⌥V (Stash), ⌥/ (Sift), ⌃⌥F (ffmpegHUD), ⌃⌥I (magickHUD), ⌃⌥P (serversHUD) | ⌃⌥H (the template's) |
 | Dock order | `order` in the manifest; family hover apps use 1-5 | `90` |
 
 ## 1. Prerequisites
