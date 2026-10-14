@@ -110,9 +110,11 @@ when it closes, so it never outlives the app, even after a crash. It is ready wh
   contract and the trust rule, which covers the `Runtimes` folder, the plugin's folder and
   everything in it. `BrainService` passes every available plugin to the companion
   (`--runtime-plugin`, `--runtime-executable`), so switching to one needs no restart; a plugin
-  that is refused, missing its executable or missing a tool it `requires` is not passed. A new
-  plugin `version` or adapter file restarts the companion at the next detection (a
-  configuration change or `refreshDetections()`). `BRAINKIT_RUNTIMES_DIR` may start with `~/`;
+  that is refused, missing its executable or missing a tool it `requires` is not passed. At
+  each detection (a configuration change or `refreshDetections()`), the companion restarts only
+  for the chosen plugin: when it was started without it, or with another folder, executable,
+  `version` or adapter file. Adding or upgrading a plugin that is not chosen never restarts it
+  (a running turn is never cut); the next start passes it. `BRAINKIT_RUNTIMES_DIR` may start with `~/`;
   a relative value reads no plugins and `runtimePluginsProblem` says why.
 - **External sessions.** A runtime that drives a session another app also shows reports it in
   `AgentSessionSnapshot.sessionKey`, in the runtime's own form, so a host can ask that app to

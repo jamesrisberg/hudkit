@@ -313,8 +313,10 @@ starting it fails with the reason, like any runtime that cannot start.
 What the rule does not cover: any process running as the user can install a plugin, and a
 plugin's adapter runs inside the companion, so it acts with the host app's privacy grants
 (Accessibility, Microphone, Full Disk Access, …) and the user's files. A plugin whose id is a
-saved runtime choice loads on the next start without being picked again. Install only plugins
-you would run as a program.
+saved runtime choice loads on the next start without being picked again. Nothing checks the
+folder above `Runtimes`, so a `BRAINKIT_RUNTIMES_DIR` belongs inside a folder only the user can
+write. Side effects of an adapter's top-level code last until the companion restarts. Install
+only plugins you would run as a program.
 
 **Adapter.** The adapter default-exports a factory:
 
@@ -343,9 +345,11 @@ export default function create(kit, { executable, toolServers, options }) {
   plugin reported unavailable.
 - `persistentState()` shares the state file's top level; its keys `permissions`, `requestIds`,
   `receipt`, `runtime`, `conversations`, `cwd` and `threadId` are ignored.
-- The companion imports the adapter once, when the runtime is first chosen. `BrainService`
-  restarts the companion when a plugin's `version` or its adapter file's modification time
-  changes (at its next detection: a configuration change or `refreshDetections()`).
+- The companion imports the adapter once, when the runtime is first chosen. At its next
+  detection (a configuration change or `refreshDetections()`), `BrainService` restarts the
+  companion when the chosen plugin is one it was started without, or whose folder, executable,
+  `version` or adapter file's modification time changed since; a plugin that is not chosen
+  waits for the next start.
 
 `test/fixtures/echo-agent/` is a complete minimal plugin, exercised by `test/plugins.test.mjs`.
 

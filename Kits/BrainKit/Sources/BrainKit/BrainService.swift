@@ -121,6 +121,9 @@ public final class BrainService: ObservableObject {
     private let fileManager = FileManager.default
     private var nodeVersions: [String: Int?] = [:]
     private var lastKey: [String]?
+    /// Each plugin the running process was started with, by id: its folder, executable, version
+    /// and adapter modification time (`BuiltSpec.plugins`).
+    private var launchedPlugins: [String: String] = [:]
     private var cancellables = Set<AnyCancellable>()
     /// Bumped whenever the runtime to follow or the process changes; a stale attempt stops.
     private var runtimeFollow = 0
@@ -182,11 +185,12 @@ public final class BrainService: ObservableObject {
 
     public func stop() { configure(nil) }
 
-    /// Look the brains and Node.js up again (after an install or upgrade); the next start uses
-    /// what is found.
+    /// Look the brains and Node.js up again (after an install or upgrade) and apply what is
+    /// found to the running configuration: an upgrade of the chosen plugin restarts the
+    /// companion; anything else is used at its next start.
     public func refreshDetections() {
-        detect(configuration)
         nodeVersions.removeAll()
+        if let applied, pendingApply == nil { apply(applied) } else { detect(configuration) }
     }
 
     /// The running companion's address and token. Nil until this process has reported ready,
@@ -222,12 +226,18 @@ public final class BrainService: ObservableObject {
         detect(configuration)
         switch processSpec(for: configuration) {
         case .success(let built):
-            if built.key == lastKey, service.spec != nil {
+            // Only the chosen plugin decides a restart: one the running process was not started
+            // with (new, or changed since). Adding or upgrading another plugin never cuts a turn;
+            // the next start passes it.
+            let chosen = configuration.runtime.rawValue
+            let chosenPluginChanged = built.plugins[chosen].map { launchedPlugins[chosen] != $0 } ?? false
+            if built.key == lastKey, service.spec != nil, !chosenPluginChanged {
                 service.replaceSpecWithoutRestart(built.spec)
                 if service.state == .running { followRuntime() }
             } else {
                 // Forced: a changed host file leaves the command line as it was.
                 service.configure(.success(built.spec), force: true)
+                launchedPlugins = built.plugins
             }
             lastKey = built.key
         case .failure(let reason):
@@ -324,8 +334,12 @@ public final class BrainService: ObservableObject {
 
     struct BuiltSpec {
         let spec: ProcessSpec
-        /// Everything but `--runtime`: a change here needs a restart.
+        /// Everything but `--runtime` and the plugins: a change here needs a restart.
         let key: [String]
+        /// Each plugin passed, by id: its folder, executable, version and adapter modification
+        /// time. The companion imports an adapter once, so the chosen plugin's entry changing
+        /// needs a restart too.
+        let plugins: [String: String]
     }
 
     func processSpec(for configuration: BrainServiceConfiguration) -> Result<BuiltSpec, ServiceUnavailable> {
@@ -409,25 +423,25 @@ public final class BrainService: ObservableObject {
         ]
         if let codex = detections[.codex]?.executable { arguments += ["--codex", codex] }
         if let claude = detections[.claude]?.executable { arguments += ["--claude", claude] }
-        let plugins = detections.values.filter { $0.plugin != nil && $0.isAvailable }
+        let available = detections.values.filter { $0.plugin != nil && $0.isAvailable }
             .sorted { $0.runtime.rawValue < $1.runtime.rawValue }
-        for detection in plugins {
+        var pluginArguments: [String] = []
+        var plugins: [String: String] = [:]
+        for detection in available {
             guard let plugin = detection.plugin, let executable = detection.executable else { continue }
-            arguments += ["--runtime-plugin", "\(plugin.id)=\(plugin.directory)",
-                          "--runtime-executable", "\(plugin.id)=\(executable)"]
+            pluginArguments += ["--runtime-plugin", "\(plugin.id)=\(plugin.directory)",
+                                "--runtime-executable", "\(plugin.id)=\(executable)"]
+            plugins[plugin.id] = [plugin.directory, executable, plugin.version,
+                                  String(plugin.adapterModified?.timeIntervalSince1970 ?? 0)].joined(separator: "\n")
         }
         let hermesURL = configuration.hermesURL.trimmingCharacters(in: .whitespaces)
         if !hermesURL.isEmpty { arguments += ["--runtime-url", hermesURL] }
         if !name.isEmpty { arguments += ["--assistant-name", name] }
         if !toolServersJSON.isEmpty { arguments += ["--tool-servers", toolServersFile.path] }
         if !hostContext.isEmpty { arguments += ["--host-context", hostContextFile.path] }
-        // The files' contents are part of the key: the companion reads them only at start. So is
-        // each plugin's version and adapter: the companion imports an adapter once.
-        let pluginVersions = plugins.map {
-            "\($0.runtime.rawValue)@\($0.plugin?.version ?? "")@\($0.plugin?.adapterModified?.timeIntervalSince1970 ?? 0)"
-        }
-        let key = [node] + arguments + [toolServersJSON, hostContext] + pluginVersions
-        arguments += ["--runtime", configuration.runtime.rawValue]
+        // The files' contents are part of the key: the companion reads them only at start.
+        let key = [node] + arguments + [toolServersJSON, hostContext]
+        arguments += pluginArguments + ["--runtime", configuration.runtime.rawValue]
         let toolDirectories = detections.values.filter { $0.plugin == nil || $0.isAvailable }.compactMap { $0.executable }
             .map { URL(fileURLWithPath: $0).deletingLastPathComponent().path }
         var environment = baseEnvironment
@@ -437,7 +451,7 @@ public final class BrainService: ObservableObject {
         environment["BRAINKIT_PARENT_PIPE"] = "1"
         let spec = ProcessSpec(executable: node, arguments: arguments, environment: environment,
                                currentDirectory: workspace)
-        return .success(BuiltSpec(spec: spec, key: key))
+        return .success(BuiltSpec(spec: spec, key: key, plugins: plugins))
     }
 
     /// Writes `data` as a private (0600) file, replacing any file or link there atomically:

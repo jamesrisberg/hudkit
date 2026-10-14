@@ -19,8 +19,9 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
   is a symbolic link; otherwise it is listed with the reason. Any program running as the user
   can install one, and it runs with the host app's permissions.
 - `BrainService` reports plugins in `detections`, passes each available one to the companion
-  (`--runtime-plugin`, `--runtime-executable`) and restarts the companion when a plugin's
-  version or adapter changes. `BrainService.runtimePluginsProblem` says why no plugin is read.
+  (`--runtime-plugin`, `--runtime-executable`), and restarts the companion when the chosen
+  plugin is new to it or its version or adapter changed (also on `refreshDetections()`); a
+  plugin that is not chosen never restarts it. `BrainService.runtimePluginsProblem` says why no plugin is read.
 - New API: `RuntimePlugin`; `BrainCatalog.detect(plugin:locator:override:)` and
   `BrainCatalog.detectAll(locator:overrides:readFile:)`; `ExecutableLocator.runtimesDirectory`,
   `runtimesDirectoryProblem`, `runtimePlugins()`, `defaultRuntimesDirectory(home:environment:)`,
