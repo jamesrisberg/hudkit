@@ -7,6 +7,13 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-29
+
+### Fixed
+- Sliding or fading in a hover panel brings it back onto every desktop even when macOS
+  still considers it open on another desktop, including when a show interrupts a hide.
+  Hovering keeps focus in the app you are using. Apps pick this up by rebuilding.
+
 ## [0.5.0] - 2026-10-13
 
 ### Added

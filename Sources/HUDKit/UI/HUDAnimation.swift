@@ -64,12 +64,13 @@ public enum HUDAnimation {
                 completion: completion)
     }
 
-    /// Orders the window in (if needed) and fades it to opaque. Cancels a fade-out in
-    /// flight so its completion cannot order the window out again.
+    /// Shows the window and fades it to opaque. Cancels a fade-out in flight so its
+    /// completion cannot order the window out again.
     public static func fadeIn(_ window: NSWindow, duration: TimeInterval = revealDuration) {
         fadeGeneration[ObjectIdentifier(window)] = (fadeGeneration[ObjectIdentifier(window)] ?? 0) &+ 1
         slideRest[ObjectIdentifier(window)] = nil
-        if !window.isVisible { window.alphaValue = 0; window.orderFrontRegardless() }
+        if !window.isVisible { window.alphaValue = 0 }
+        orderInForShow(window)
         animate(window, alpha: 1, duration: duration, timing: revealTiming)
     }
 
@@ -117,8 +118,8 @@ public enum HUDAnimation {
         if !window.isVisible {
             window.alphaValue = 0
             window.setFrame(offset(frame, toward: edge), display: false)
-            window.orderFrontRegardless()
         }
+        orderInForShow(window)
         animate(window, to: frame, alpha: 1, duration: duration, timing: revealTiming) {
             // The slide-in landed: from now on the live frame is the truth (the user may drag
             // the panel or MacHUD may re-frame it), so a later slideOut must not use this.
@@ -148,6 +149,14 @@ public enum HUDAnimation {
     }
 
     @MainActor private static var slideRest: [ObjectIdentifier: CGRect] = [:]
+
+    /// An ordered-in hover panel can still be stranded on another desktop. Ordering it in
+    /// again runs HUDPanelWindow's Spaces repair without restarting an in-flight animation.
+    private static func orderInForShow(_ window: NSWindow) {
+        if !window.isVisible || (window as? HUDPanelWindow)?.behavior == .hover {
+            window.orderFrontRegardless()
+        }
+    }
 
     @discardableResult
     private static func bumpGeneration(_ window: NSWindow) -> UInt {

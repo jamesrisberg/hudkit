@@ -282,6 +282,74 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
 }
 
 extension HUDPanelWindowSpacesTests {
+    func testBackgroundHoverShowRestoresAllDesktopsWhileAlreadyOnTheActiveDesktop() throws {
+        let app = NSApplication.shared
+        let policy = app.activationPolicy()
+        app.setActivationPolicy(.accessory)
+        defer { app.setActivationPolicy(policy) }
+        let (all, _) = try spacesForStranding()
+        let w = hoverPanel()
+        w.presenceKeeper = handDrivenKeeper().keeper
+        orderInAndWait(w)
+        let active = try XCTUnwrap(WindowServerSpaces.currentSpace(for: w))
+        WindowServerSpaces.strandVisible(w, on: active)
+        XCTAssertTrue(waitUntil { WindowServerSpaces.spaces(of: w) == [active] },
+                      "precondition: membership in the other desktops was lost")
+        XCTAssertTrue(w.isOnActiveSpace, "the panel is already on the current desktop")
+
+        w.orderFrontRegardless()
+
+        XCTAssertTrue(waitUntil { WindowServerSpaces.spaces(of: w) == all },
+                      "show restores every desktop even when the current one is healthy")
+        XCTAssertFalse(w.isKeyWindow)
+    }
+
+    /// Animation shows also repair an ordered-in panel left on another desktop. Its
+    /// visibility flag stays true there, including while a dock hide is still fading.
+    func testAnimatedShowBringsAVisibleStrandedHoverPanelOntoEveryDesktop() throws {
+        let (all, other) = try spacesForStranding()
+        for animation in ["slide", "fadeIn"] {
+            let w = hoverPanel(keyable: true)
+            w.presenceKeeper = handDrivenKeeper().keeper
+            orderInAndWait(w)
+            WindowServerSpaces.strandVisible(w, on: other)
+            XCTAssertTrue(waitUntil { WindowServerSpaces.spaces(of: w) == [other] && !w.isOnActiveSpace },
+                          "\(animation): precondition: stranded on another desktop")
+            XCTAssertTrue(w.isVisible, "\(animation): ordered in on that desktop")
+
+            if animation == "slide" {
+                HUDAnimation.slide(in: w, from: .left, to: w.frame, duration: 0.01)
+            } else {
+                HUDAnimation.fadeIn(w, duration: 0.01)
+            }
+
+            XCTAssertTrue(waitUntil { self.isShownOnTheDesktop(w) && WindowServerSpaces.spaces(of: w) == all },
+                          "\(animation): the show brings the panel onto every desktop")
+            XCTAssertFalse(w.isKeyWindow, "\(animation): no focus taken")
+            w.orderOut(nil)
+        }
+    }
+
+    func testAnimatedShowsLeaveVisibleWindowedAndWidgetWindowsInPlace() {
+        for behavior in [HUDPanelWindow.Behavior.windowed, .widget] {
+            let w = RecordingPanel(contentRect: liveTestFrame(), behavior: behavior)
+            windows.append(w)
+            w.showsInDock = false
+            w.presenceKeeper = handDrivenKeeper().keeper
+            w.alphaValue = 0.02
+            w.orderFrontRegardless()
+            w.resetRecords()
+
+            HUDAnimation.slide(in: w, from: .left, to: w.frame, duration: 0.01)
+            HUDAnimation.fadeIn(w, duration: 0.01)
+
+            XCTAssertEqual(w.orderIns, 0, "\(behavior): an animation does not raise an already visible window")
+            XCTAssertTrue(w.behaviourSets.isEmpty, "\(behavior): its Spaces policy stays unchanged")
+            XCTAssertFalse(w.isKeyWindow)
+            w.orderOut(nil)
+        }
+    }
+
     /// Every Space of the main display, and one that is not current, from a reference hover
     /// panel; skips without the SkyLight calls or a second desktop.
     private func spacesForStranding() throws -> (all: Set<UInt64>, other: UInt64) {

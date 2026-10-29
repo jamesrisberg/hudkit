@@ -537,17 +537,18 @@ The manifest's `kind` tells MacHUD how to present a panel; the app's window beha
 `reason=hover` it only orders the window in; otherwise it makes it key, and a windowed window
 also activates the app (moving it to the current Space first if needed).
 
-A hover window appears on the Space the user is on, every time, whichever call orders it in
-(`orderFrontRegardless`, `orderFront`, `makeKeyAndOrderFront`, `HUDAnimation`,
-`activateOnShow`): HUDPanelWindow re-asserts the hover Spaces behaviour on every order-in (the
-window server can drop a window's all-Spaces membership while AppKit still reports
-`.canJoinAllSpaces`, and AppKit does not resend an unchanged value), and 0.15 s after the
-latest order-in, if the window is still visible on another Space, brings it over with
+Every order-in of a hover `HUDPanelWindow` (`orderFrontRegardless`, `orderFront`,
+`makeKeyAndOrderFront`, `HUDAnimation`, `activateOnShow`) re-asserts the hover Spaces behaviour.
+The window server can drop a window's all-Spaces membership while AppKit still reports
+`.canJoinAllSpaces`, and AppKit does not resend an unchanged value. At 0.15 s after the
+latest order-in, if the window is still visible on another Space, HUDPanelWindow brings it over with
 `.moveToActiveSpace` and restores the behaviour, without switching Spaces or activating the app
 (a key panel stays key). A panel on another display's current desktop counts as on screen and
 is left alone. A change found then posts `HUDPanelWindow.activeSpaceDidSettleNotification`
 (after a move, once AppKit reports the new Space) and the router pushes `state` with the
-settled `onActiveSpace`. Dock labels (`HUDDockStripView`) re-assert their every-Space behaviour
+settled `onActiveSpace`. `HUDAnimation.fadeIn` and `slide(in:)` order an already-visible hover
+window in again too, so a show on another desktop or during a hide runs the same repair.
+Dock labels (`HUDDockStripView`) re-assert their every-Space behaviour
 on each show too. Apps get this by showing a `HUDPanelWindow` built against this
 HUDKit; nothing to call. Setting `panelID` on the window (or overriding
 `HUDPanelHost.panelWindow(_:)`) lets an app with several panels or windows report
