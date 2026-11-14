@@ -5,7 +5,18 @@ import XCTest
 
 @MainActor
 final class PanelPlacementTests: XCTestCase {
-    func testDockShowKeepsTheFrameAssignedToClearBothToolbarArms() async throws {
+    override func setUp() async throws { _ = NSApplication.shared }
+
+    /// Let AppKit finish on its run loop before checking the exact destination.
+    private func waitForFrame(_ frame: CGRect, panel: PanelController) {
+        let earliest = Date().addingTimeInterval(HUDAnimation.revealDuration)
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            MainActor.assumeIsolated { Date() >= earliest && panel.window.frame == frame }
+        }, object: nil)
+        let result = XCTWaiter.wait(for: [settled], timeout: 5)
+        XCTAssertEqual(result, .completed, "Expected \(frame), got \(panel.window.frame)")
+    }
+    func testDockShowKeepsTheFrameAssignedToClearBothToolbarArms() throws {
         let model = AppModel(settingsURL: nil)
         let panel = PanelController(model: model)
         defer { panel.hide(); panel.window.orderOut(nil) }
@@ -17,22 +28,22 @@ final class PanelPlacementTests: XCTestCase {
             in: CGRect(x: 0, y: 0, width: 1200, height: 900))
         panel.setFrame(assigned)
         panel.show(HUDPanelTransition(from: .left, anchor: anchor, reason: .hover))
-        try await Task.sleep(nanoseconds: 350_000_000)
+        waitForFrame(assigned, panel: panel)
         XCTAssertEqual(panel.window.frame, assigned)
         XCTAssertFalse(panel.window.frame.intersects(toolbar))
     }
 
-    func testPlainShowDuringConcealmentKeepsTheLatestAssignedFrame() async throws {
+    func testPlainShowDuringConcealmentKeepsTheLatestAssignedFrame() throws {
         let panel = PanelController(model: AppModel(settingsURL: nil))
         defer { panel.hide(); panel.window.orderOut(nil) }
         panel.setFrame(CGRect(origin: CGPoint(x: 200, y: 200), size: PanelController.size))
         panel.show()
-        try await Task.sleep(nanoseconds: 350_000_000)
+        waitForFrame(CGRect(origin: CGPoint(x: 200, y: 200), size: PanelController.size), panel: panel)
         panel.hide(HUDPanelTransition(to: .left))
         let latest = CGRect(origin: CGPoint(x: 360, y: 140), size: PanelController.size)
         panel.setFrame(latest)
         panel.show()
-        try await Task.sleep(nanoseconds: 350_000_000)
+        waitForFrame(latest, panel: panel)
         XCTAssertTrue(panel.isShown)
         XCTAssertEqual(panel.window.frame, latest)
     }
