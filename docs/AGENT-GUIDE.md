@@ -730,6 +730,8 @@ final class PanelController {
     let window: HUDPanelWindow
     private let glass = HUDGlassView(style: .panel)
     private let host: NSHostingView<PanelView>
+    /// MacHUD's placement clears every arm of its dock; an anchor alone cannot do that.
+    private var assignedFrame: CGRect?
     /// Whether the panel is meant to be on screen (`isVisible` stays true during a fade-out).
     private(set) var isShown = false
     /// `full`, or `parked` against a screen edge (`panel mode`).
@@ -760,10 +762,10 @@ final class PanelController {
         if !isShown { model.panelOpened() }
         isShown = true
         if let from = transition.from {
-            let frame = transition.panelFrame(size: window.frame.size) ?? window.frame
+            let frame = assignedFrame ?? transition.panelFrame(size: window.frame.size) ?? window.frame
             HUDAnimation.slide(in: window, from: from, to: frame)
         } else {
-            HUDAnimation.fadeIn(window)
+            HUDAnimation.fadeIn(window, to: assignedFrame)
         }
         onStateChange?()
     }
@@ -805,7 +807,10 @@ final class PanelController {
         onStateChange?()
     }
 
-    func setFrame(_ frame: CGRect) { window.setFrame(frame, display: true) }
+    func setFrame(_ frame: CGRect) {
+        assignedFrame = frame
+        window.setFrame(frame, display: true)
+    }
 
     private func center() {
         guard let screen = NSScreen.main?.visibleFrame else { return }

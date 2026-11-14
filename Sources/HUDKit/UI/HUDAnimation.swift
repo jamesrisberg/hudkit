@@ -64,14 +64,23 @@ public enum HUDAnimation {
                 completion: completion)
     }
 
-    /// Shows the window and fades it to opaque. Cancels a fade-out in flight so its
-    /// completion cannot order the window out again.
+    /// Shows the window and fades it to opaque, restoring an interrupted slide's rest frame.
     public static func fadeIn(_ window: NSWindow, duration: TimeInterval = revealDuration) {
-        fadeGeneration[ObjectIdentifier(window)] = (fadeGeneration[ObjectIdentifier(window)] ?? 0) &+ 1
-        slideRest[ObjectIdentifier(window)] = nil
+        fadeIn(window, to: nil, duration: duration)
+    }
+
+    /// Shows the window and fades it to opaque at an explicit destination, else an interrupted
+    /// slide's rest frame. Cancels a hide so its completion cannot order the window out again.
+    public static func fadeIn(_ window: NSWindow, to frame: CGRect?, duration: TimeInterval = revealDuration) {
+        let key = ObjectIdentifier(window)
+        let generation = bumpGeneration(window)
+        let rest = frame ?? slideRest[key]
+        slideRest[key] = rest
         if !window.isVisible { window.alphaValue = 0 }
         orderInForShow(window)
-        animate(window, alpha: 1, duration: duration, timing: revealTiming)
+        animate(window, to: rest, alpha: 1, duration: duration, timing: revealTiming) {
+            if fadeGeneration[key] == generation { slideRest[key] = nil }
+        }
     }
 
     /// Fades the window out, orders it out and restores its alpha. If `fadeIn` (or another
@@ -79,11 +88,11 @@ public enum HUDAnimation {
     public static func fadeOut(_ window: NSWindow, duration: TimeInterval = concealDuration,
                                completion: (@MainActor () -> Void)? = nil) {
         let key = ObjectIdentifier(window)
-        let generation = (fadeGeneration[key] ?? 0) &+ 1
-        fadeGeneration[key] = generation
-        slideRest[key] = nil
-        animate(window, alpha: 0, duration: duration, timing: concealTiming) {
+        let generation = bumpGeneration(window)
+        let rest = slideRest[key]
+        animate(window, to: rest, alpha: 0, duration: duration, timing: concealTiming) {
             guard fadeGeneration[key] == generation else { return }
+            slideRest[key] = nil
             window.orderOut(nil)
             window.alphaValue = 1
             completion?()
@@ -138,9 +147,11 @@ public enum HUDAnimation {
         let generation = bumpGeneration(window)
         // Mid slide-in the live frame is partway there; restore the frame it was headed for.
         // Otherwise the live frame is the rest frame.
-        let rest = slideRest.removeValue(forKey: key) ?? window.frame
+        let rest = slideRest[key] ?? window.frame
+        slideRest[key] = rest
         animate(window, to: offset(rest, toward: edge), alpha: 0, duration: duration, timing: concealTiming) {
             guard fadeGeneration[key] == generation else { return }
+            slideRest[key] = nil
             window.orderOut(nil)
             window.setFrame(rest, display: false)
             window.alphaValue = 1
@@ -148,6 +159,7 @@ public enum HUDAnimation {
         }
     }
 
+    /// The stable destination while a slide (or an interrupting fade) owns the frame.
     @MainActor private static var slideRest: [ObjectIdentifier: CGRect] = [:]
 
     /// An ordered-in hover panel can still be stranded on another desktop. Ordering it in
