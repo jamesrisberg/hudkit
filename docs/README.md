@@ -13,6 +13,6 @@ needed ([../llms.txt](../llms.txt) lists the same).
 | [../Kits/VoiceKit/README.md](../Kits/VoiceKit/README.md) | VoiceKit, the voice package in `Kits/VoiceKit`: wake word, trigger phrases, reply voices, voice settings, model downloads, and how its tests run |
 | [../README.md](../README.md) | HUDKit itself: the types an app gets, the contract in brief, the dock, the settings schema, the glass chrome |
 | [../CHANGELOG.md](../CHANGELOG.md) | HUDKit's releases |
-| [../scripts/](../scripts) | `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh`, `hud-icon.sh`, `hud-ci.yml` (usage in each script's header) |
+| [../scripts/](../scripts) | `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh`, `hud-icon.sh` (usage in each script's header) |
 | [../Templates/App](../Templates/App) | The app template `hud-new-app.sh` instantiates |
 | [../.claude/skills/hudkit-app/SKILL.md](../.claude/skills/hudkit-app/SKILL.md) | The Claude Code skill: the condensed playbook and verification commands |

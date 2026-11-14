@@ -54,8 +54,8 @@ HUD_NO_ANNOUNCE=1 ./build.sh debug
 ```
 
 `hud-new-app.sh <repo> <Product> [parent-dir]` copies `Templates/App` to
-`<parent-dir>/<repo>` (default: next to HUDKit, i.e. `~/dev`), fills the placeholders, installs
-`.github/workflows/ci.yml`, runs `git init -b main` and commits `TallyHUD 0.1.0 from the HUDKit
+`<parent-dir>/<repo>` (default: next to HUDKit, i.e. `~/dev`), fills the placeholders,
+runs `git init -b main` and commits `TallyHUD 0.1.0 from the HUDKit
 app template`. It refuses an existing directory and a repo name that is not lowercase letters and
 digits. The new app is complete and compliant before you change anything: it has one hover panel
 `main` that shows a greeting, a `say` action, two settings and a CLI.
