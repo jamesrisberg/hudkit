@@ -76,7 +76,7 @@ private enum WindowServerSpaces {
 
     static func clearAllSpacesMembership(_ window: NSWindow) {
         guard let connection, let clearTags else { return }
-        var tags: [UInt32] = [1 << 11, 0]
+        var tags: [UInt32] = [1 << 11, 0]  // kCGSStickyTagBit
         _ = clearTags(connection, UInt32(window.windowNumber), &tags, 64)
     }
 
@@ -85,9 +85,8 @@ private enum WindowServerSpaces {
     /// one other Space. AppKit cannot produce this itself, and its setter skips an unchanged
     /// value, so a plain order-in leaves the window there.
     static func strand(_ window: NSWindow, on space: UInt64) {
-        guard let connection, let clearTags, let move else { return }
-        var tags: [UInt32] = [1 << 11, 0]  // kCGSStickyTagBit
-        _ = clearTags(connection, UInt32(window.windowNumber), &tags, 64)
+        guard let connection, let move else { return }
+        clearAllSpacesMembership(window)
         move(connection, [window.windowNumber] as CFArray, space)
     }
 
@@ -97,10 +96,9 @@ private enum WindowServerSpaces {
     /// the state a window is left in when the server drops its all-Spaces membership and the
     /// user then switches desktops.
     static func strandVisible(_ window: NSWindow, on space: UInt64) {
-        guard let connection, let clearTags, let move else { return }
+        guard let connection, let move else { return }
         let before = spaces(of: window)
-        var tags: [UInt32] = [1 << 11, 0]  // kCGSStickyTagBit
-        _ = clearTags(connection, UInt32(window.windowNumber), &tags, 64)
+        clearAllSpacesMembership(window)
         waitUntil { spaces(of: window).count < before.count }
         move(connection, [window.windowNumber] as CFArray, space)
     }
