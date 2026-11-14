@@ -74,6 +74,12 @@ private enum WindowServerSpaces {
         return Set(list)
     }
 
+    static func clearAllSpacesMembership(_ window: NSWindow) {
+        guard let connection, let clearTags else { return }
+        var tags: [UInt32] = [1 << 11, 0]
+        _ = clearTags(connection, UInt32(window.windowNumber), &tags, 64)
+    }
+
     /// Puts `window` in the state the Spaces handling must repair: the window server's sticky
     /// (all-Spaces) tag cleared while AppKit still holds `.canJoinAllSpaces`, and the window on
     /// one other Space. AppKit cannot produce this itself, and its setter skips an unchanged
@@ -282,6 +288,45 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
 }
 
 extension HUDPanelWindowSpacesTests {
+    /// A public-API move must work even when reasserting all-Spaces membership does not.
+    /// Otherwise the sticky-tag repair masks a move that was cancelled before AppKit sent it.
+    func testBackgroundFallbackMovesWhenAllSpacesRepairDoesNotTake() throws {
+        let (_, other) = try spacesForStranding()
+        let app = NSApplication.shared
+        let policy = app.activationPolicy()
+        app.setActivationPolicy(.accessory)
+        defer { app.setActivationPolicy(policy) }
+        try XCTSkipIf(app.isActive, "requires the test runner to be a background app")
+        for action in ["move", "hover show"] {
+            let w = StickyRepairResistantPanel(contentRect: liveTestFrame())
+            w.alphaValue = 0.02
+            w.presenceKeeper = handDrivenKeeper().keeper
+            windows.append(w)
+            orderInAndWait(w)
+            let active = try XCTUnwrap(WindowServerSpaces.currentSpace(for: w))
+            let frame = w.frame
+            WindowServerSpaces.strandVisible(w, on: other)
+            XCTAssertTrue(waitUntil { WindowServerSpaces.spaces(of: w) == [other] && !w.isOnActiveSpace })
+            w.rejectsAllSpacesRepair = true
+            let wasActive = app.isActive
+
+            if action == "move" {
+                w.moveToActiveSpace()
+            } else {
+                HUDAnimation.slide(in: w, from: .left, to: frame, duration: 0.01)
+            }
+
+            XCTAssertTrue(waitUntil {
+                self.isShownOnTheDesktop(w) && WindowServerSpaces.spaces(of: w) == [active]
+                    && w.collectionBehavior == HUDPanelWindow.hoverCollectionBehavior
+            }, "\(action): the move must reach the active desktop without relying on the sticky-tag repair")
+            XCTAssertEqual(w.frame, frame)
+            XCTAssertFalse(w.isKeyWindow)
+            XCTAssertEqual(app.isActive, wasActive)
+            w.orderOut(nil)
+        }
+    }
+
     func testBackgroundHoverShowRestoresAllDesktopsWhileAlreadyOnTheActiveDesktop() throws {
         let app = NSApplication.shared
         let policy = app.activationPolicy()
@@ -517,6 +562,7 @@ extension HUDPanelWindowSpacesTests {
             shared.probe = probe
         }
         w.orderFrontRegardless()
+        waitForSpaceChecks()
         fake.strand(w)
         NSWorkspace.shared.notificationCenter.post(name: NSWorkspace.activeSpaceDidChangeNotification,
                                                    object: NSWorkspace.shared)
@@ -589,6 +635,19 @@ extension HUDPanelWindowSpacesTests {
         XCTAssertTrue(w.screen == NSScreen.screens[1])
         XCTAssertTrue(w.isOnActiveSpace)
         XCTAssertFalse(w.ensureOnActiveSpace())
+    }
+}
+
+@MainActor
+private final class StickyRepairResistantPanel: HUDPanelWindow {
+    var rejectsAllSpacesRepair = false
+
+    override var collectionBehavior: NSWindow.CollectionBehavior {
+        didSet {
+            if rejectsAllSpacesRepair, collectionBehavior.contains(.canJoinAllSpaces) {
+                WindowServerSpaces.clearAllSpacesMembership(self)
+            }
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 import AppKit
 
-/// The MacHUD panel window, in one of two behaviours.
+/// The MacHUD panel window, in one of three behaviours.
 ///
 /// - `.hover` (the default): the recipe hover panels and dock strips use. Borderless,
 ///   non-activating, floating, on every Space, transparent with a shadow, dark appearance,
@@ -101,6 +101,7 @@ open class HUDPanelWindow: NSPanel {
     /// panel's behaviour). `level` defaults to `.floating` for hover and `.normal` for
     /// windowed and `widgetDesktopLevel` for widget. Other style mask bits (`.resizable`) are kept.
     public func applyHUDRecipe(behavior: Behavior, level: NSWindow.Level? = nil) {
+        cancelSpaceMove()
         self.behavior = behavior
         switch behavior {
         case .hover:
@@ -199,6 +200,7 @@ open class HUDPanelWindow: NSPanel {
     // Keep the activation policy in step with visibility, hover windows on the user's Space,
     // and every all-Spaces window in the presence keeper's care while it is ordered in.
     open override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        if place == .out { cancelSpaceMove() }
         let hoverShow = place != .out && prepareHoverShow()
         super.order(place, relativeTo: otherWin)
         if hoverShow { finishHoverShow() }
@@ -215,6 +217,7 @@ open class HUDPanelWindow: NSPanel {
     }
 
     open override func close() {
+        cancelSpaceMove()
         super.close()
         HUDDockPolicy.shared.update(self)
         presenceKeeper.update(self)
@@ -232,8 +235,11 @@ open class HUDPanelWindow: NSPanel {
 
     // MARK: Hover windows on every Space
 
-    /// Set while `moveToActiveSpace` re-orders the window, so the overrides do not recurse.
+    /// Held until AppKit has processed the temporary move behaviour.
     private var movingToActiveSpace = false
+    private var spaceMoveWork: HUDScheduledWork?
+    /// Tests advance the move's run-loop wait without sleeping.
+    var spaceScheduler: HUDScheduler = .main
     /// Bumped by every order-in; a scheduled Space check runs only if no order-in followed it.
     private var spaceCheckGeneration = 0
     /// `isOnActiveSpace` right after the latest order-in (what a panel reply reported).
@@ -251,6 +257,8 @@ open class HUDPanelWindow: NSPanel {
     /// window asynchronously, so `isOnActiveSpace` read sooner can still describe the Space the
     /// window was on before.
     static let spaceCheckDelay: TimeInterval = 0.15
+    /// One wait for the move, then one for the restored all-Spaces behaviour to settle.
+    static let spaceMoveSettleDelay = spaceCheckDelay * 2
 
     /// Every order-in of a hover window (`orderFrontRegardless`, `orderFront`,
     /// `makeKeyAndOrderFront`, HUDAnimation, `activateOnShow`) first re-asserts the hover
@@ -267,6 +275,8 @@ open class HUDPanelWindow: NSPanel {
     /// Spaces behaviour keeping the window's other bits, or exactly `widgetCollectionBehavior`.
     /// A windowed window is left alone.
     func rejoinAllSpaces() {
+        // An overlapping environment check must not clear the move before AppKit sends it.
+        guard !movingToActiveSpace else { return }
         switch behavior {
         case .hover: reassertAllSpaces(Self.hoverBehavior(keeping: collectionBehavior))
         case .widget: reassertAllSpaces(Self.widgetCollectionBehavior)
@@ -284,11 +294,21 @@ open class HUDPanelWindow: NSPanel {
 
     private func scheduleSpaceCheck(afterMove: Bool) {
         let generation = spaceCheckGeneration
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.spaceCheckDelay) { [weak self] in
+        // The move holds its temporary behaviour for one wait; the restored all-Spaces
+        // behaviour then needs its own turn before its result can be published.
+        let delay = afterMove ? Self.spaceMoveSettleDelay : Self.spaceCheckDelay
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             MainActor.assumeIsolated {
-                guard let self, self.spaceCheckGeneration == generation, self.isVisible else { return }
+                guard let self, self.spaceCheckGeneration == generation,
+                      self.behavior == .hover, self.isVisible else { return }
                 if afterMove {
-                    // AppKit now reports where the move put the window.
+                    if self.movingToActiveSpace {
+                        self.scheduleSpaceCheck(afterMove: true)
+                        return
+                    }
+                    // A show uses the same server-aware failure handling as an environment
+                    // change if the first move did not bring the panel back.
+                    self.presenceKeeper.checkAfterShow(self)
                     NotificationCenter.default.post(name: Self.activeSpaceDidSettleNotification, object: self)
                 } else if self.ensureOnActiveSpace() {
                     self.scheduleSpaceCheck(afterMove: true)
@@ -299,37 +319,53 @@ open class HUDPanelWindow: NSPanel {
         }
     }
 
-    /// If a visible hover window is still not on the active Space, brings it over
-    /// (`moveToActiveSpace`). Returns whether it had to.
+    /// Brings an intended visible hover window over when the window server has it off
+    /// screen, falling back to AppKit only if the server cannot list it.
     ///
     /// `isOnActiveSpace` is true for a window on the current Space of any display (with
     /// "Displays have separate Spaces", a panel on the other display's current desktop counts
     /// as on screen), so a panel shown on a second display is left alone.
     @discardableResult
     func ensureOnActiveSpace() -> Bool {
-        guard behavior == .hover, isVisible, !isOnActiveSpace, !movingToActiveSpace else { return false }
+        guard behavior == .hover, isVisible, alphaValue > 0, !movingToActiveSpace,
+              HUDParking.screenFrame(for: frame, among: presenceKeeper.probe.screens().map(\.frame)) != nil
+        else { return false }
+        let server = presenceKeeper.probe.serverWindow(self)
+        guard server?.isOnScreen == false || (server == nil && !isOnActiveSpace) else { return false }
         HUDLog.presence.notice("moving \(self.logName, privacy: .public) to the active Space: still elsewhere after a show")
         moveToActiveSpace()
         return true
     }
 
     /// Brings a visible hover window to the active Space the way a windowed show does
-    /// (`.moveToActiveSpace`, without switching Spaces or activating the app), then restores
-    /// the hover behaviour; a window that was key is key again after. Called only for a window
-    /// that is not on screen (it is on another Space), so ordering it out and back in is unseen.
+    /// (`.moveToActiveSpace`, without switching Spaces or activating the app). The temporary
+    /// behaviour stays set for a run-loop wait before restoring all-Spaces membership:
+    /// clearing it in the same turn cancels the move if the membership repair does not take.
+    /// A window that was key stays key. Called only for an off-screen window.
     func moveToActiveSpace() {
         guard behavior == .hover, isVisible, !movingToActiveSpace else { return }
         let hover = Self.hoverBehavior(keeping: collectionBehavior)
         let wasKey = isKeyWindow
         movingToActiveSpace = true
-        defer { movingToActiveSpace = false }
         // Ordering out resigns key; `orderFrontRegardless` neither makes it key nor activates
         // the app, so key status is given back explicitly.
         super.order(.out, relativeTo: 0)
         collectionBehavior = hover.subtracting(.canJoinAllSpaces).union(.moveToActiveSpace)
         super.orderFrontRegardless()
-        reassertAllSpaces(hover)
         if wasKey { makeKey() }
+        spaceMoveWork = spaceScheduler.after(Self.spaceCheckDelay) { [weak self] in
+            self?.cancelSpaceMove()
+        }
+    }
+
+    /// Finishes a move, or cancels it before a hide, close or recipe change. Restoring the
+    /// recipe never orders the window in, so a late completion cannot undo a hide.
+    private func cancelSpaceMove() {
+        guard movingToActiveSpace else { return }
+        spaceMoveWork?.cancel()
+        spaceMoveWork = nil
+        movingToActiveSpace = false
+        if behavior == .hover { rejoinAllSpaces() }
     }
 
     /// How the presence and full-screen logs name this window: its class, the first of

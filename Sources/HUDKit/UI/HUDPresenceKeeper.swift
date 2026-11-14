@@ -124,24 +124,25 @@ final class HUDPresenceKeeper {
             let onScreen = server.map { String($0.isOnScreen) } ?? "unlisted"
             let bounds = server.map { HUDLog.format($0.bounds) } ?? "unlisted"
             let state = "isOnActiveSpace=\(onActiveSpace) serverOnScreen=\(onScreen)"
+            let trigger = change.isEmpty ? "show" : change.description
             switch kind {
             case .offDesktop:
                 return "restoring \(window) (\(behavior.rawValue)), off the user's desktop: frame \(HUDLog.format(frame)) "
-                    + "\(state) serverBounds \(bounds) after \(change)"
+                    + "\(state) serverBounds \(bounds) after \(trigger)"
             case .stillOffDesktop:
                 let next = retryInterval.map {
                     "it is tried again at most every \(String(format: "%.0f", $0)) s while the window server has it off screen "
                         + "(expected while its screen shows a full-screen Space)"
                 } ?? "the window server does not have it off screen, so it is not repaired again until it is seen on the desktop"
                 return "\(window) (\(behavior.rawValue)) is still off the user's desktop after a repair; \(next): "
-                    + "frame \(HUDLog.format(frame)) \(state) serverBounds \(bounds) after \(change)"
+                    + "frame \(HUDLog.format(frame)) \(state) serverBounds \(bounds) after \(trigger)"
             case .back:
                 return "\(window) (\(behavior.rawValue)) is back on the user's desktop after \(attempts) "
                     + "attempt\(attempts == 1 ? "" : "s"): frame \(HUDLog.format(frame)) \(state) serverBounds \(bounds) "
-                    + "after \(change)"
+                    + "after \(trigger)"
             case .displaced:
                 return "\(window) (\(behavior.rawValue)) is displaced, not repaired: frame \(HUDLog.format(frame)) "
-                    + "serverBounds \(bounds) \(state) after \(change)"
+                    + "serverBounds \(bounds) \(state) after \(trigger)"
             }
         }
     }
@@ -243,7 +244,18 @@ final class HUDPresenceKeeper {
     /// second look at displaced ones. Returns the repairs logged now (a retry is not logged).
     @discardableResult
     func check(_ change: HUDEnvironmentMonitor.Change) -> [Finding] {
-        let windows = trackedWindows
+        check(change, windows: trackedWindows)
+    }
+
+    /// A show that remains off screen after its move gets the environment repair's verified
+    /// attempt and failure reporting. Only this panel is considered, and only server evidence
+    /// of an off-screen window warrants another move.
+    func checkAfterShow(_ window: HUDPanelWindow) {
+        guard isTracking(window), probe.serverWindow(window)?.isOnScreen == false else { return }
+        _ = check([], windows: [window])
+    }
+
+    private func check(_ change: HUDEnvironmentMonitor.Change, windows: [HUDPanelWindow]) -> [Finding] {
         guard !windows.isEmpty else { return [] }
         let screens = probe.screens().map(\.frame)
         var onScreenWindows: [HUDWindowSnapshot]?
@@ -318,7 +330,8 @@ final class HUDPresenceKeeper {
                                   change: HUDEnvironmentMonitor.Change, moved: Bool) {
         let key = ObjectIdentifier(window)
         followUps[key]?.cancel()
-        followUps[key] = scheduler.after(HUDPanelWindow.spaceCheckDelay) { [weak self, weak window] in
+        let delay = moved ? HUDPanelWindow.spaceMoveSettleDelay : HUDPanelWindow.spaceCheckDelay
+        followUps[key] = scheduler.after(delay) { [weak self, weak window] in
             self?.followUps[key] = nil
             guard let self, let window else { return }
             self.followUp(window, onActiveSpaceBefore: onActiveSpaceBefore, change: change, moved: moved)

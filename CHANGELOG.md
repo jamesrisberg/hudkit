@@ -7,6 +7,12 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Fixed
+- Hover panels recover onto the current desktop when macOS leaves them attached to another
+  desktop and restoring their all-desktop membership does not work. Recovery preserves
+  keyboard focus, checks where the window ended up, and cancels cleanly when the panel hides.
+  Apps pick this up by rebuilding.
+
 ## [0.5.1] - 2026-10-29
 
 ### Fixed
