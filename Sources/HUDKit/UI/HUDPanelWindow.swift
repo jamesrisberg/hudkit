@@ -252,10 +252,9 @@ open class HUDPanelWindow: NSPanel {
     /// before it, or had to bring it over (then once AppKit has caught up with the move).
     /// `HUDControlRouter` publishes `state` on it, so `onActiveSpace` settles for subscribers.
     public static let activeSpaceDidSettleNotification = Notification.Name("HUDPanelWindowActiveSpaceDidSettle")
-    /// How long after the latest order-in the Space check runs (and, after a move, how long
-    /// before the settled value is announced). AppKit learns where the window server put a
-    /// window asynchronously, so `isOnActiveSpace` read sooner can still describe the Space the
-    /// window was on before.
+    /// Initial wait after order-in, and the interval used to let each move and restoration
+    /// reach the window server. AppKit learns where a window was put asynchronously, so
+    /// `isOnActiveSpace` read sooner can still describe the desktop it was on before.
     static let spaceCheckDelay: TimeInterval = 0.15
     /// One wait for the move, then one for the restored all-Spaces behaviour to settle.
     static let spaceMoveSettleDelay = spaceCheckDelay * 2
