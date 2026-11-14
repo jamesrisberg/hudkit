@@ -54,8 +54,8 @@ HUD_NO_ANNOUNCE=1 ./build.sh debug
 ```
 
 `hud-new-app.sh <repo> <Product> [parent-dir]` copies `Templates/App` to
-`<parent-dir>/<repo>` (default: next to HUDKit, i.e. `~/dev`), fills the placeholders, installs
-`.github/workflows/ci.yml`, runs `git init -b main` and commits `TallyHUD 0.1.0 from the HUDKit
+`<parent-dir>/<repo>` (default: next to HUDKit, i.e. `~/dev`), fills the placeholders,
+runs `git init -b main` and commits `TallyHUD 0.1.0 from the HUDKit
 app template`. It refuses an existing directory and a repo name that is not lowercase letters and
 digits. The new app is complete and compliant before you change anything: it has one hover panel
 `main` that shows a greeting, a `say` action, two settings and a CLI.
@@ -730,6 +730,8 @@ final class PanelController {
     let window: HUDPanelWindow
     private let glass = HUDGlassView(style: .panel)
     private let host: NSHostingView<PanelView>
+    /// MacHUD's placement clears every arm of its dock; an anchor alone cannot do that.
+    private var assignedFrame: CGRect?
     /// Whether the panel is meant to be on screen (`isVisible` stays true during a fade-out).
     private(set) var isShown = false
     /// `full`, or `parked` against a screen edge (`panel mode`).
@@ -760,10 +762,10 @@ final class PanelController {
         if !isShown { model.panelOpened() }
         isShown = true
         if let from = transition.from {
-            let frame = transition.panelFrame(size: window.frame.size) ?? window.frame
+            let frame = assignedFrame ?? transition.panelFrame(size: window.frame.size) ?? window.frame
             HUDAnimation.slide(in: window, from: from, to: frame)
         } else {
-            HUDAnimation.fadeIn(window)
+            HUDAnimation.fadeIn(window, to: assignedFrame)
         }
         onStateChange?()
     }
@@ -805,7 +807,10 @@ final class PanelController {
         onStateChange?()
     }
 
-    func setFrame(_ frame: CGRect) { window.setFrame(frame, display: true) }
+    func setFrame(_ frame: CGRect) {
+        assignedFrame = frame
+        window.setFrame(frame, display: true)
+    }
 
     private func center() {
         guard let screen = NSScreen.main?.visibleFrame else { return }

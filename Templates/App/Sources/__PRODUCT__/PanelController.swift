@@ -16,6 +16,8 @@ final class PanelController {
     let window: HUDPanelWindow
     private let glass = HUDGlassView(style: .panel)
     private let host: NSHostingView<PanelView>
+    /// MacHUD's placement clears the entire dock, including both arms at a corner.
+    private var assignedFrame: CGRect?
     /// Whether the panel is meant to be on screen (`isVisible` stays true during a fade-out).
     private(set) var isShown = false
     /// Called when visibility changes (for `state` events).
@@ -34,17 +36,16 @@ final class PanelController {
         center()
     }
 
-    /// Shows the panel. With MacHUD's `from=`/`anchor=` it slides out of the dock next to the
-    /// button; otherwise it fades in where it is. Never takes focus: a hover panel must not
-    /// steal the keyboard from the app the user is in.
+    /// MacHUD assigns the destination before showing. The button anchor is a fallback for
+    /// callers that send only a transition; it cannot describe the whole dock's geometry.
     func show(_ transition: HUDPanelTransition = HUDPanelTransition()) {
         if !isShown { model.panelOpened() }
         isShown = true
         if let from = transition.from {
-            let frame = transition.panelFrame(size: window.frame.size) ?? window.frame
+            let frame = assignedFrame ?? transition.panelFrame(size: window.frame.size) ?? window.frame
             HUDAnimation.slide(in: window, from: from, to: frame)
         } else {
-            HUDAnimation.fadeIn(window)
+            HUDAnimation.fadeIn(window, to: assignedFrame)
         }
         onStateChange?()
     }
@@ -63,7 +64,10 @@ final class PanelController {
 
     func toggle() { isShown ? hide() : show() }
 
-    func setFrame(_ frame: CGRect) { window.setFrame(frame, display: true) }
+    func setFrame(_ frame: CGRect) {
+        assignedFrame = frame
+        window.setFrame(frame, display: true)
+    }
 
     private func center() {
         guard let screen = NSScreen.main?.visibleFrame else { return }

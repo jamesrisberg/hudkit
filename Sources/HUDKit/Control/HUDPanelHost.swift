@@ -57,9 +57,19 @@ public struct HUDPanelModeOptions: Equatable, Sendable {
 /// | `reason=hover/click/summon` | why: pointer over a hover app's button, a click, or a hotkey/CLI summon |
 ///
 /// ```swift
+/// private var assignedFrame: CGRect?
+/// func setPanelFrame(_ id: String, frame: CGRect) throws {
+///     assignedFrame = frame
+///     window.setFrame(frame, display: true)
+/// }
 /// func showPanel(_ id: String, options: [String: String]) throws {
 ///     let t = HUDPanelTransition(options)
-///     HUDAnimation.slide(in: window, from: t.from ?? .top, to: t.panelFrame(size: window.frame.size) ?? window.frame)
+///     if let from = t.from {
+///         let frame = assignedFrame ?? t.panelFrame(size: window.frame.size) ?? window.frame
+///         HUDAnimation.slide(in: window, from: from, to: frame)
+///     } else {
+///         HUDAnimation.fadeIn(window, to: assignedFrame)
+///     }
 /// }
 /// ```
 public struct HUDPanelTransition: Equatable, Sendable {

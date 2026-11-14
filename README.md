@@ -1,7 +1,7 @@
 # HUDKit
 
 The shared contract, visual language and build tooling for MacHUD-aware macOS apps (Sift, Stash,
-Scratch, ffmpegHUD, magickHUD, serversHUD, widgetHUD, UsageHUD and MacHUD itself).
+Scratch, ffmpegHUD, magickHUD, serversHUD, widgetHUD, calHUD, UsageHUD and MacHUD itself).
 macOS 14+, Swift 5.9+.
 
 ## What it is
@@ -17,7 +17,7 @@ look the same:
 - `Kits/VoiceKit`: a separate package for voice (wake word, trigger phrases, reply voices and
   voice settings); an app that depends only on HUDKit never fetches it. See
   [its README](Kits/VoiceKit/README.md).
-- `scripts/`: `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh` and the `hud-ci.yml` workflow.
+- `scripts/`: `hud-build.sh`, `hud-install.sh`, `hud-new-app.sh` and `hud-catalog.sh`.
 - `Templates/App`: a minimal complete app that `hud-new-app.sh` instantiates.
 - [docs/](docs/README.md): the [contract spec](docs/CONTRACT.md), the
   [agent guide](docs/AGENT-GUIDE.md) for building an app, the [CLI reference](docs/CLI.md) and
@@ -281,12 +281,14 @@ swift test                  # HUDKitTests
 Each kit in `Kits/` is its own package and is tested from its folder:
 
 ```sh
-cd Kits/BrainKit && swift test                                        # BrainKitTests
-cd Kits/BrainKit/Sources/BrainKit/Companion && node --test test/*.test.mjs   # its Node companion
+(cd Kits/BrainKit && swift test)
+(cd Kits/BrainKit/Sources/BrainKit/Companion && node --test test/*.test.mjs)
+(cd Kits/VoiceKit && swift test)
 ```
 
-CI runs the same on `macos-26` ([.github/workflows/ci.yml](.github/workflows/ci.yml)). The
-version is in [VERSION](VERSION) and `HUDKit.version` (kept equal); changes are in
+Run these checks locally before pushing. GitHub Actions deploys MacHUD's website;
+family test suites run on the development Mac. The version is in [VERSION](VERSION)
+and `HUDKit.version` (kept equal); changes are in
 [CHANGELOG.md](CHANGELOG.md).
 
 ### App scripts and template

@@ -522,6 +522,12 @@ The manifest's `kind` tells MacHUD how to present a panel; the app's window beha
 
 ### What the app must do
 
+Preserve the frame assigned by `panel frame` when showing the panel. MacHUD's placement
+clears every arm of its dock; recomputing from the button's `anchor` alone loses that
+clearance. Use `HUDPanelTransition.panelFrame(size:)` only when no frame has been assigned.
+For a plain show, `HUDAnimation.fadeIn(window, to: assignedFrame)` keeps a newer placement
+from being replaced by the destination of a hide that is still in progress.
+
 | | Hover | Windowed |
 |---|---|---|
 | Window | `HUDPanelWindow(contentRect:)` (`.hover`: borderless, non-activating, `.floating`, every Space, never hides on deactivate) | `HUDPanelWindow(contentRect:behavior: .windowed)` (normal level, activates on click, current Space, Mission Control, Dock tile while shown via `HUDDockPolicy`) |

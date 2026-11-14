@@ -7,6 +7,12 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+### Fixed
+- New apps made from the template preserve MacHUD's panel placement, keeping hover panels
+  clear of both arms of a corner toolbar.
+- Reopening a panel while it slides away restores its position, including when opened from
+  a widget or keyboard shortcut.
+
 ## [0.5.2] - 2026-11-13
 
 ### Fixed

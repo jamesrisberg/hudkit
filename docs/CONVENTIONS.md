@@ -1,7 +1,7 @@
 # MacHUD app repo conventions
 
 How every app in the MacHUD family (Sift, Stash, Scratch, ffmpegHUD, magickHUD, serversHUD,
-widgetHUD, UsageHUD, and the next one) lays out its repo, builds, versions and documents itself.
+widgetHUD, calHUD, UsageHUD, and the next one) lays out its repo, builds, versions and documents itself.
 The rules come from what the apps already do; where they differed, the most common or most useful
 variant won. `Templates/App` is the executable form of this document: `scripts/hud-new-app.sh`
 turns it into a new repo that follows every rule below. What the app serves over its socket is
@@ -38,7 +38,6 @@ the same file on a case-insensitive volume.
   .gitignore
   build.sh  install.sh            two-line shims into ../hudkit/scripts
   <Product>.entitlements          optional; applied by hud-build.sh when present
-  .github/workflows/ci.yml        = hudkit/scripts/hud-ci.yml
   docs/
     CONTRACT.md                   socket verbs, actions, settings keys, env vars, launch flags
     ARCHITECTURE.md               optional
@@ -195,12 +194,14 @@ cd "${0:A:h}" && exec "${HUDKIT_DIR:-../hudkit}/scripts/hud-install.sh" <Product
 | `hud-build.sh <Product> [release\|debug]` | `swift build` of `<Product>` (and `<Product>CLI`), assembles `build/<Product>.app` (MacOS, Resources — including every `*.bundle` SwiftPM produced for the build, found via `swift build --show-bin-path`, so a Kit's bundled companion or model data ships too — Helpers/<repo>, Info.plist with the version), signs with the first "Apple Development" identity (hardened runtime, `<Product>.entitlements` if present) or ad-hoc, prints the app path last. `HUD_SIGN_IDENTITY` overrides the identity (`-` = ad-hoc). `HUD_HELPERS="<product> …"` also builds those executable products into `Contents/Helpers/<product>`, signed with the app's entitlements (for a process the app runs itself), with a relative link to each SwiftPM resource bundle beside it, since a helper's `Bundle.main` is `Contents/Helpers`. Every `@rpath` framework the app or a helper links is copied from the bin path into `Contents/Frameworks` and signed first; a dylib with an absolute install name (Homebrew) is not bundled. |
 | `hud-install.sh <Product>` | release build, quits a running copy (`<repo> quit` when the socket answers, else AppleScript), copies to `/Applications`, links the CLI into the first writable PATH dir (`/opt/homebrew/bin`, `/usr/local/bin`, `~/bin`, `~/.local/bin` preferred), launches. `HUD_APPLICATIONS` and `HUD_NO_LAUNCH` for testing. A repo with install needs of its own adds `scripts/install-hooks.sh` (sourced after the build: `hud_install_before_quit <app>`, `HUD_EXTRA_LINKS="scripts/a scripts/b"`) instead of forking the script. |
 | `hud-icon.sh <repo> [dir] [--preview png]` | renders `Icons/<repo>.svg` (or the placeholder `Icons/template.svg`) into `AppIcon.icns` and the menu bar PNGs; see **Icons**. |
-| `hud-new-app.sh <repo> <Product> [parent]` | new repo from `Templates/App` next to HUDKit, placeholders filled, CI installed, `git init`, first commit. |
+| `hud-new-app.sh <repo> <Product> [parent]` | new repo from `Templates/App` next to HUDKit, placeholders filled, `git init`, first commit. |
 | `hud-release.sh <Product> [version] [--dry-run]` | a signed, notarized GitHub release and catalog entry; see **Releasing**. `--check` reports what is configured. |
 | `hud-catalog.sh set\|hudkit\|show` | edits MacHUD's app catalog, `machud/site/catalog.json`; see **Releasing**. |
-| `hud-ci.yml` | the CI workflow: `swift test` on `macos-26` with HUDKit checked out at `../hudkit`. Copy verbatim to `.github/workflows/ci.yml`. |
 
 All scripts are zsh with `set -euo pipefail`.
+
+Tests and app builds run locally before pushing. GitHub Actions publishes MacHUD's
+website and catalog; it does not run the family's test suites.
 
 ## README
 
@@ -345,16 +346,16 @@ through all of it with a worked example and the verification sequence.
 
 ## Where the current apps differ
 
-All eight apps have `Sources/<Product>/Resources`, the build/install shims, `VERSION`,
-`CHANGELOG.md`, `ci.yml` and a `<Product>Tests` target. What differs from the rules above:
+All nine apps have `Sources/<Product>/Resources`, the build/install shims, `VERSION`,
+`CHANGELOG.md` and a `<Product>Tests` target. What differs from the rules above:
 
 | App | Difference |
 |---|---|
 | sift | Kit is `FileKit` (Stash depends on it by that name); settings live in UserDefaults and `<home>/rules.json`, not `preferences.json`; reads `SIFT_TARGETS_FILE` and `SIFT_DOCKS_FILE` too |
 | stash | `STASH_SOCKET` also takes an absolute path |
 | scratch, sift, stash, ffmpeghud, magickhud, servershud | `--snapshot` keeps the app running after writing the PNG (Stash quits with `--snapshot-quit`); quit it with `<repo> quit` |
-| widgethud, usagehud | `--snapshot` writes its PNG and quits |
-| all but the template, widgethud and usagehud | the CLI ignores a leading `ctl` and has `watch` |
+| widgethud, calhud, usagehud | `--snapshot` writes its PNG and quits |
+| all but the template, widgethud, calhud and usagehud | the CLI ignores a leading `ctl` and has `watch` |
 
 MacHUD itself (`machud`) is the umbrella app, not a panel app: it keeps its own bundle id
 (`com.jrisberg.machud`), control socket (`/tmp/machud-<uid>.sock`, plus the contract socket

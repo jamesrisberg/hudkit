@@ -3,7 +3,7 @@
 #
 # Starts a MacHUD app repo from HUDKit's Templates/App: copies it to <parent-dir>/<repo>
 # (default: the directory next to this HUDKit checkout, so ../hudkit resolves), replaces the
-# placeholders, installs the CI workflow, runs git init and makes the first commit.
+# placeholders, runs git init and makes the first commit.
 #
 #   <repo>      lowercase: repo, socket, CLI and bundle-id suffix (e.g. ffmpeghud)
 #   <Product>   the displayed name and Swift target prefix (e.g. ffmpegHUD)
@@ -52,9 +52,6 @@ find "$DEST" -type f -not -path '*/.git/*' -print0 | while IFS= read -r -d '' fi
   REPO="$REPO" UPPER="$UPPER" PRODUCT="$PRODUCT" YEAR="$YEAR" DATE="$DATE" AUTHOR="$AUTHOR" \
     perl -pi -e 's/__REPO_UPPER__/$ENV{UPPER}/g; s/__REPO__/$ENV{REPO}/g; s/__PRODUCT__/$ENV{PRODUCT}/g; s/__YEAR__/$ENV{YEAR}/g; s/__DATE__/$ENV{DATE}/g; s/__AUTHOR__/$ENV{AUTHOR}/g' "$file"
 done
-
-mkdir -p "$DEST/.github/workflows"
-cp "$HUDKIT/scripts/hud-ci.yml" "$DEST/.github/workflows/ci.yml"
 
 if grep -rIl -e '__REPO' -e '__PRODUCT__' -e '__YEAR__' -e '__DATE__' -e '__AUTHOR__' "$DEST" >/dev/null 2>&1; then
   print -u2 "hud-new-app: placeholders left in:"

@@ -220,12 +220,60 @@ final class UIComponentTests: XCTestCase {
         w.orderFrontRegardless()
         let done = expectation(description: "fade settled")
         HUDAnimation.fadeOut(w, duration: 0.05)
-        HUDAnimation.fadeIn(w, duration: 0.05)
+        let fadeIn: (NSWindow, TimeInterval) -> Void = HUDAnimation.fadeIn
+        fadeIn(w, 0.05)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { done.fulfill() }
         wait(for: [done], timeout: 2)
         XCTAssertTrue(w.isVisible, "a fade-in that interrupts a fade-out must win")
         XCTAssertEqual(w.alphaValue, 1, accuracy: 0.01)
         w.orderOut(nil)
+    }
+
+    func testFadeInDuringSlideOutRestoresTheRestFrame() {
+        let rest = CGRect(x: 200, y: 200, width: 100, height: 100)
+        let w = HUDPanelWindow(contentRect: rest)
+        defer { w.orderOut(nil) }
+        w.orderFrontRegardless()
+        let done = expectation(description: "interrupted slide settled")
+        HUDAnimation.slideOut(w, toward: .left, duration: 0.05)
+        HUDAnimation.fadeIn(w, duration: 0.05)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { done.fulfill() }
+        wait(for: [done], timeout: 2)
+        XCTAssertTrue(w.isVisible)
+        XCTAssertEqual(w.alphaValue, 1, accuracy: 0.01)
+        XCTAssertEqual(w.frame, rest, "a plain show must cancel the outgoing frame animation too")
+    }
+
+    func testFadeOutDuringSlideOutPreservesTheRestFrameForTheNextShow() {
+        for reopen in [false, true] {
+            let rest = CGRect(x: 200, y: 200, width: 100, height: 100)
+            let w = HUDPanelWindow(contentRect: rest)
+            w.orderFrontRegardless()
+            let done = expectation(description: "interrupted conceal settled")
+            HUDAnimation.slideOut(w, toward: .top, duration: 0.05)
+            HUDAnimation.fadeOut(w, duration: 0.05)
+            if reopen { HUDAnimation.fadeIn(w, duration: 0.05) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { done.fulfill() }
+            wait(for: [done], timeout: 2)
+            XCTAssertEqual(w.isVisible, reopen)
+            XCTAssertEqual(w.frame, rest)
+            w.orderOut(nil)
+        }
+    }
+
+    func testExplicitFadeDestinationWinsOverAnInterruptedSlide() {
+        let w = HUDPanelWindow(contentRect: CGRect(x: 200, y: 200, width: 100, height: 100))
+        defer { w.orderOut(nil) }
+        w.orderFrontRegardless()
+        let latest = CGRect(x: 360, y: 140, width: 120, height: 110)
+        let done = expectation(description: "latest placement settled")
+        HUDAnimation.slideOut(w, toward: .left, duration: 0.05)
+        w.setFrame(latest, display: false)
+        HUDAnimation.fadeIn(w, to: latest, duration: 0.05)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { done.fulfill() }
+        wait(for: [done], timeout: 2)
+        XCTAssertTrue(w.isVisible)
+        XCTAssertEqual(w.frame, latest)
     }
 
     func testSlideOutUsesLiveFrameAfterSlideInLanded() {
