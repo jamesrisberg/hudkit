@@ -541,12 +541,18 @@ Every order-in of a hover `HUDPanelWindow` (`orderFrontRegardless`, `orderFront`
 `makeKeyAndOrderFront`, `HUDAnimation`, `activateOnShow`) re-asserts the hover Spaces behaviour.
 The window server can drop a window's all-Spaces membership while AppKit still reports
 `.canJoinAllSpaces`, and AppKit does not resend an unchanged value. At 0.15 s after the
-latest order-in, if the window is still visible on another Space, HUDPanelWindow brings it over with
-`.moveToActiveSpace` and restores the behaviour, without switching Spaces or activating the app
-(a key panel stays key). A panel on another display's current desktop counts as on screen and
-is left alone. A change found then posts `HUDPanelWindow.activeSpaceDidSettleNotification`
-(after a move, once AppKit reports the new Space) and the router pushes `state` with the
-settled `onActiveSpace`. `HUDAnimation.fadeIn` and `slide(in:)` order an already-visible hover
+latest order-in, HUDPanelWindow checks the specific window's server on-screen flag, using
+AppKit's active-Space reading only when the server cannot list it. An off-screen panel whose
+frame belongs on a display is brought over with `.moveToActiveSpace`, without switching
+Spaces or activating the app (a key panel stays key). The temporary move behaviour stays set
+for 0.15 s so AppKit can process it before all-Spaces behaviour is restored; its result is
+checked after another 0.15 s. A panel on another display's current desktop is left alone.
+Hiding, closing or changing the window's behaviour cancels a pending move without ordering
+it in again. A change found then posts `HUDPanelWindow.activeSpaceDidSettleNotification`
+and the router pushes `state` with the settled `onActiveSpace`. If the server still has the
+panel off screen, the presence keeper makes a verified repair attempt and logs a continuing
+failure, using the same throttling as its environment checks.
+`HUDAnimation.fadeIn` and `slide(in:)` order an already-visible hover
 window in again too, so a show on another desktop or during a hide runs the same repair.
 Dock labels (`HUDDockStripView`) re-assert their every-Space behaviour
 on each show too. Apps get this by showing a `HUDPanelWindow` built against this

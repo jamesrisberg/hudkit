@@ -40,6 +40,7 @@ final class HUDPresenceKeeperTests: XCTestCase {
         w.showsInDock = false   // a windowed one must not give the test runner a Dock tile
         w.alphaValue = 0.02
         w.presenceKeeper = keeper
+        w.spaceScheduler = clock.scheduler
         windows.append(w)
         w.orderFrontRegardless()
         w.resetRecords()
@@ -131,6 +132,33 @@ final class HUDPresenceKeeperTests: XCTestCase {
 
     // MARK: - Off the user's desktop
 
+    func testFailedShowUsesTheServerAwareRepairAndReportsAContinuingFailure() {
+        let w = shown(.hover)
+        fake.strand(w)
+
+        keeper.checkAfterShow(w)
+        clock.advance(by: 1)
+
+        XCTAssertEqual(w.moves, 1)
+        XCTAssertEqual(findings.map(\.kind), [.offDesktop, .stillOffDesktop])
+        XCTAssertTrue(findings.allSatisfy { $0.message.contains("after show") })
+        for _ in 0..<10 { keeper.checkAfterShow(w) }
+        clock.advance(by: 1)
+        XCTAssertEqual(w.moves, 1, "a failed show does not loop on a window that cannot return")
+        w.orderOut(nil)
+        clock.advance(by: 60)
+        XCTAssertFalse(w.isVisible)
+    }
+
+    func testShowCheckLeavesAWindowTheServerShowsOnScreenAlone() {
+        let w = shown(.hover)
+        fake.onActiveSpace[ObjectIdentifier(w)] = false
+        keeper.checkAfterShow(w)
+        clock.advance(by: 1)
+        XCTAssertTrue(w.untouched)
+        XCTAssertTrue(findings.isEmpty)
+    }
+
     func testHoverOffTheDesktopIsReassertedThenMovedIfTheServerStillHasItOffScreen() {
         let w = shown(.hover)
         let settled = settleNotifications(for: w)
@@ -146,7 +174,7 @@ final class HUDPresenceKeeperTests: XCTestCase {
         XCTAssertEqual(w.moves, 1, "the window server still has it off screen: moved to the active Space")
         XCTAssertEqual(settled(), 0)
         fake.heal(w)
-        clock.advance(by: HUDPanelWindow.spaceCheckDelay)
+        clock.advance(by: HUDPanelWindow.spaceMoveSettleDelay)
         XCTAssertEqual(settled(), 1, "the settled onActiveSpace is announced once AppKit has caught up")
         XCTAssertEqual(findings.map(\.kind), [.offDesktop], "the move worked: nothing more to say")
     }
