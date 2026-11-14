@@ -249,7 +249,10 @@ final class HUDPanelWindowSpacesTests: XCTestCase {
             case "activateOnShow(hover)": w.activateOnShow(HUDPanelTransition(reason: .hover))
             default: HUDAnimation.slide(in: w, from: .left, to: w.frame, duration: 0.01)
             }
-            waitUntil { w.isOnActiveSpace && WindowServerSpaces.spaces(of: w) == all }
+            waitUntil {
+                w.isOnActiveSpace && WindowServerSpaces.spaces(of: w) == all
+                    && w.collectionBehavior == HUDPanelWindow.hoverCollectionBehavior
+            }
             XCTAssertTrue(w.isOnActiveSpace, "\(show): on the user's desktop")
             XCTAssertEqual(WindowServerSpaces.spaces(of: w), all, "\(show): back on every desktop")
             XCTAssertFalse(w.isKeyWindow, "\(show): no focus taken")
@@ -494,6 +497,9 @@ extension HUDPanelWindowSpacesTests {
         -> (window: RecordingPanel, healthy: Set<UInt64>, findings: [HUDPresenceKeeper.Finding]) {
         let (_, other) = try spacesForStranding()
         let hand = handDrivenKeeper()
+        // Supply an ordinary desktop: another app's screen-sized window must not turn this
+        // recovery test into a full-screen suppression test. Window and Space probes stay live.
+        hand.keeper.probe.windows = { [] }
         let w = recordingPanel(behavior)
         w.presenceKeeper = hand.keeper
         orderInAndWait(w)
