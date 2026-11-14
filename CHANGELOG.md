@@ -7,6 +7,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-14
+
 ### Fixed
 - New apps made from the template preserve MacHUD's panel placement, keeping hover panels
   clear of both arms of a corner toolbar.
