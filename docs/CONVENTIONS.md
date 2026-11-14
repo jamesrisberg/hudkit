@@ -1,7 +1,7 @@
 # MacHUD app repo conventions
 
 How every app in the MacHUD family (Sift, Stash, Scratch, ffmpegHUD, magickHUD, serversHUD,
-widgetHUD, UsageHUD, and the next one) lays out its repo, builds, versions and documents itself.
+widgetHUD, calHUD, UsageHUD, and the next one) lays out its repo, builds, versions and documents itself.
 The rules come from what the apps already do; where they differed, the most common or most useful
 variant won. `Templates/App` is the executable form of this document: `scripts/hud-new-app.sh`
 turns it into a new repo that follows every rule below. What the app serves over its socket is
@@ -346,7 +346,7 @@ through all of it with a worked example and the verification sequence.
 
 ## Where the current apps differ
 
-All eight apps have `Sources/<Product>/Resources`, the build/install shims, `VERSION`,
+All nine apps have `Sources/<Product>/Resources`, the build/install shims, `VERSION`,
 `CHANGELOG.md` and a `<Product>Tests` target. What differs from the rules above:
 
 | App | Difference |
@@ -354,8 +354,8 @@ All eight apps have `Sources/<Product>/Resources`, the build/install shims, `VER
 | sift | Kit is `FileKit` (Stash depends on it by that name); settings live in UserDefaults and `<home>/rules.json`, not `preferences.json`; reads `SIFT_TARGETS_FILE` and `SIFT_DOCKS_FILE` too |
 | stash | `STASH_SOCKET` also takes an absolute path |
 | scratch, sift, stash, ffmpeghud, magickhud, servershud | `--snapshot` keeps the app running after writing the PNG (Stash quits with `--snapshot-quit`); quit it with `<repo> quit` |
-| widgethud, usagehud | `--snapshot` writes its PNG and quits |
-| all but the template, widgethud and usagehud | the CLI ignores a leading `ctl` and has `watch` |
+| widgethud, calhud, usagehud | `--snapshot` writes its PNG and quits |
+| all but the template, widgethud, calhud and usagehud | the CLI ignores a leading `ctl` and has `watch` |
 
 MacHUD itself (`machud`) is the umbrella app, not a panel app: it keeps its own bundle id
 (`com.jrisberg.machud`), control socket (`/tmp/machud-<uid>.sock`, plus the contract socket
