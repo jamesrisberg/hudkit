@@ -7,6 +7,8 @@ is 0.x a contract addition bumps the minor version and additive API or fixes the
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-13
+
 ### Fixed
 - Hover panels recover onto the current desktop when macOS leaves them attached to another
   desktop and restoring their all-desktop membership does not work. Recovery preserves
